@@ -14,7 +14,7 @@ svg {
 
 }
 svg g.hexagon {
-  fill: black;
+  fill: white;
   fill-opacity: 0;
 }
 svg g.hexagon:hover {
@@ -25,13 +25,14 @@ svg g:hover text {
 }
 
 svg g.hexagon polygon {
-  stroke: #333333;
-  stroke-width: 0.1;
+  stroke: white;
+  stroke-width: 0.02;
+  stroke-opacity: 0.5;
   transition: fill-opacity .2s;
 }
 svg g text {
   font-size: 0.3em;
-  fill: black;
+  fill: white;
   fill-opacity: 0.4;
   transition: fill-opacity .2s;
 }

@@ -88,7 +88,7 @@ export const astralBodies: AstralBody[] = [
   },
   {
     name: "Ceres",
-    position: { q: 20, r: 4 },
+    position: { q: 20, r: 14 },
     faceFill: 0.19,
     faceFillOriginal: 0.3,
     color: "#E0E0E0",
@@ -96,7 +96,7 @@ export const astralBodies: AstralBody[] = [
   },
   {
     name: "Clandestine",
-    position: { q: 21, r: -13 },
+    position: { q: 21, r: -3 },
     faceFill: 0.16,
     faceFillOriginal: 0.3,
     color: "#999999",
@@ -104,7 +104,7 @@ export const astralBodies: AstralBody[] = [
   },
   {
     name: "Jupiter",
-    position: { q: 11, r: 1 },
+    position: { q: 11, r: 11 },
     faceFill: 0.57,
     faceFillOriginal: 0.54,
     color: "#F4A460",
@@ -114,7 +114,7 @@ export const astralBodies: AstralBody[] = [
   },
   {
     name: "Callisto",
-    position: { q: 11, r: 5 },
+    position: { q: 11, r: 15 },
     faceFill: 0.28,
     faceFillOriginal: 0.15,
     color: "#C0C0C0",
