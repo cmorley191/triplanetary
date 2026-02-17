@@ -13,18 +13,18 @@
 svg {
 
 }
-svg g {
+svg g.hexagon {
   fill: black;
   fill-opacity: 0;
 }
-svg g:hover {
+svg g.hexagon:hover {
   fill-opacity: 0.3;
 }
 svg g:hover text {
   fill-opacity: 0.3;
 }
 
-svg g polygon {
+svg g.hexagon polygon {
   stroke: #333333;
   stroke-width: 0.1;
   transition: fill-opacity .2s;
