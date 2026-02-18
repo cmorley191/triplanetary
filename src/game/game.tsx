@@ -17,6 +17,7 @@ export const sideSW: SideSW = { q: -1, r: 1 };
 export type SideNW = { q: -1, r: 0 }
 export const sideNW: SideNW = { q: -1, r: 0 };
 export type Side = SideN | SideNE | SideSE | SideS | SideSW | SideNW
+export const sides = [sideN, sideNE, sideSE, sideS, sideSW, sideNW];
 
 export type CornerNE = { q: 1, r: -2 }
 export const cornerNE: CornerNE = { q: 1, r: -2 };

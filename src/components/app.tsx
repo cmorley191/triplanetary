@@ -5,8 +5,8 @@ import * as React from "react";
 
 import { HexGrid, Layout, Hexagon, Hex } from 'react-hexgrid';
 
-import { astralBodies, Axis, Corner, cornerE, cornerNE, cornerNW, cornerSE, cornerSW, cornerW, Position, Side, sideN, sideNE, sideNW, sideS, sideSE, sideSW } from "../game/game";
-import { nullopt, nullopt_t, opt, opt_, opt_t, Optional } from "../core/optional";
+import { astralBodies, AstralBodyType, Axis, Corner, cornerE, cornerNE, cornerNW, cornerSE, cornerSW, cornerW, Position, Side, sideN, sideNE, sideNW, sides, sideS, sideSE, sideSW } from "../game/game";
+import { nullopt, nullopt_t, opt, opt_, opt_t, optFromUndefable, Optional } from "../core/optional";
 import { fullyUnpackGenerator, getRandomInt, minmax, satisfiesCheck } from '../core/misc';
 
 
@@ -27,6 +27,17 @@ export function getQRangeOfR(r: number): { minInclusive: number, maxExclusive: n
     minInclusive: Math.max(-r * 2, 0),
     maxExclusive: Math.min((mapSize.height - 1 - r) * 2 + 1, mapSize.width),
   };
+}
+
+function addPositions(a: Position, b: Position) { return { q: a.q + b.q, r: a.r + b.r }; }
+
+function positionToSide(p: Position): Optional<Side> {
+  return optFromUndefable(sides.filter(s => s.q == p.q && s.r == p.r)[0]);
+}
+
+function throwOnNullopt<T>(o: Optional<T>, err: string): T {
+  if (o.hasValue === false) throw err;
+  return o.value;
 }
 
 const sqrt3 = Math.sqrt(3);
@@ -345,6 +356,130 @@ function getHexIntersections(path: { start: Position, end: Position })
   };
 }
 
+enum PathInteractionType { Intersection, EdgeTrace }
+type PathInteraction =
+  & { time: number }
+  & (
+    | {
+      type: PathInteractionType.Intersection,
+      intersectedPosition: Position,
+      tangentPosition: Optional<Position>,
+    }
+    | {
+      type: PathInteractionType.EdgeTrace,
+      tracedPositions: [Position, Position],
+    }
+  )
+function getHexInteractions(path: { start: Position, end: Position }) {
+  const intersectionsData = getHexIntersections(path);
+  if (intersectionsData.type === PathIntersectionsType.AxisAligned) {
+    return {
+      ...intersectionsData,
+      interactions:
+        [...intersectionsData.iterate()]
+          .map((i): PathInteraction => ({ time: i.time, type: PathInteractionType.Intersection, intersectedPosition: i.position, tangentPosition: nullopt }))
+    };
+  } else if (intersectionsData.type === PathIntersectionsType.EdgeAligned) {
+    return {
+      ...intersectionsData,
+      interactions:
+        fullyUnpackGenerator(intersectionsData.iterate())
+          .flatMap((i): PathInteraction[] => [
+            { time: i.intersected.time, type: PathInteractionType.Intersection, intersectedPosition: i.intersected.position, tangentPosition: nullopt },
+            ...(
+              i.passed.hasValue
+                ? [{
+                  time: i.passed.value.time,
+                  type: PathInteractionType.EdgeTrace as PathInteractionType.EdgeTrace,
+                  tracedPositions: i.passed.value.positions,
+                }]
+                : []
+            ),
+          ])
+    };
+  } else {
+    satisfiesCheck<PathIntersectionsType.Oblique>(intersectionsData.type);
+    return {
+      ...intersectionsData,
+      interactions:
+        intersectionsData.intersections.map((i): PathInteraction => ({
+          time: i.time,
+          type: PathInteractionType.Intersection,
+          intersectedPosition: i.intersected,
+          tangentPosition: i.passed,
+        }))
+    };
+  }
+}
+
+function onlyIntersectionInteractionsFilterTransform(i: PathInteraction): Optional<PathInteraction & { type: PathInteractionType.Intersection }> {
+  if (i.type === PathInteractionType.EdgeTrace) return nullopt;
+  return opt_(i);
+}
+
+type ArrowProps = React.SVGProps<SVGLineElement> & {
+  id?: string;
+  x1?: number;
+  y1?: number;
+  x2?: number;
+  y2?: number;
+  strokeWidth?: number;
+  color?: string;
+  style?: React.CSSProperties;
+  className?: string;
+};
+
+const Arrow: React.FC<ArrowProps> = ({
+  id = "arrowhead",
+  x1 = 0,
+  y1 = 0,
+  x2 = 100,
+  y2 = 0,
+  strokeWidth = 2,
+  color = "currentColor",
+  style = {},
+  className = "",
+  ...props
+}) => {
+  return (
+    <>
+      <defs>
+        <marker
+          id={id}
+          markerWidth="5"
+          markerHeight="3.5"
+          refX="5"
+          refY="1.75"
+          orient="auto"
+        >
+          <polygon
+            className={`arrowhead ${className}`}
+            points="0 0, 5 1.75, 0 3.5"
+            fill={color}
+            style={style}
+          />
+        </marker>
+      </defs>
+
+      <line
+        x1={x1}
+        y1={y1}
+        x2={x2}
+        y2={y2}
+        stroke={color}
+        strokeWidth={strokeWidth}
+        markerEnd={`url(#${id})`}
+        style={style}
+        className={className}
+        {...props}
+      />
+    </>
+  );
+};
+
+
+
+
 type AppProps = {};
 export default function App({ }: AppProps) {
   const appStartingPosition = React.useMemo<Position>(() => {
@@ -359,70 +494,41 @@ export default function App({ }: AppProps) {
     }
   }, []);
 
-  const [destination, setDestination] = React.useState<Optional<Position>>(nullopt);
-
-  const highlighted = React.useMemo<{ position: Position, important: boolean }[]>(() => {
-    if (destination.hasValue === false) return [];
-
-    const intersectionsData = getHexIntersections({
-      start: appStartingPosition,
-      end: destination.value,
-    });
-
-    if (intersectionsData.type === PathIntersectionsType.AxisAligned) {
-      return (
-        [...intersectionsData.iterate()]
-          .map(i => ({ position: i.position, important: true }))
-      );
-    } else if (intersectionsData.type === PathIntersectionsType.EdgeAligned) {
-      return (
-        fullyUnpackGenerator(intersectionsData.iterate())
-          .flatMap(i => [
-            { position: i.intersected.position, important: true },
-            ...(
-              i.passed.hasValue
-                ? i.passed.value.positions.map(position => ({ position, important: false }))
-                : []
-            ),
-          ])
-      );
-    } else {
-      satisfiesCheck<PathIntersectionsType.Oblique>(intersectionsData.type);
-      return (
-        intersectionsData.intersections.flatMap(i => [
-          { position: i.intersected, important: true },
-          ...(
-            i.passed.hasValue
-              ? [{ position: i.passed.value, important: false }]
-              : []
-          ),
-        ])
-      );
-    }
-  }, [destination]);
-
-  /*
-  const [history, setHistory] = React.useState<{
+  const [history, setHistoryRaw] = React.useState<{
     thrust: Optional<Side>,
-    ignoredFirstWeakGravity: boolean,
+    ignoredFirstWeakGravityBodyIndices: number[],
   }[]>([]);
-  
+
   const historyMemoizations = React.useRef<{
     startPosition: Position,
     momentumAppliedFromLast: Position,
     gravityAppliedFromLast: {
-      hexes: { position: Position, direction: Side, weak: boolean }[],
+      gravityHexes: {
+        position: Position,
+        netStrong: Position,
+        netWeak: Position,
+        netAppliedWeak: Position,
+        net: Position,
+        bodies: {
+          iBody: number,
+          gravity: Position,
+          gravityType: "strong" | "applied weak" | "ignored weak",
+        }[]
+      }[],
       net: Position,
     },
     netTransform: Position,
     endPosition: Position,
   }[]>([]);
-  React.useEffect(() => {
-    history
+
+  const setHistory = (newHistory: typeof history) => {
+    setHistoryRaw(newHistory);
+
+    newHistory
       .skip(historyMemoizations.current.length)
       .forEach(h => {
-        const lastStoredMemoization = historyMemoizations.current[0];
-        const lastMemoization =
+        const lastStoredMemoization = historyMemoizations.current[historyMemoizations.current.length - 1];
+        const { startPosition: lastStartPosition, endPosition: startPosition, netTransform: momentumAppliedFromLast } =
           lastStoredMemoization === undefined
             ? {
               startPosition: appStartingPosition,
@@ -430,17 +536,87 @@ export default function App({ }: AppProps) {
               netTransform: { q: 0, r: 0 } as Position,
             }
             : lastStoredMemoization;
-        const gravityAppliedFromLast = 
-  
-        ;
+        const handledFirstWeakGravityBodyIndices: number[] = [];
+        const hexInteractions =
+          getHexInteractions({ start: lastStartPosition, end: startPosition })
+            .interactions.filterTransform(onlyIntersectionInteractionsFilterTransform);
+        const gravityHexes =
+          getHexInteractions({ start: lastStartPosition, end: startPosition })
+            .interactions.filterTransform(onlyIntersectionInteractionsFilterTransform)
+            .skip(hexInteractions.length == 1 ? 0 : 1)
+            .map(hex => {
+              const gravityBodies = astralBodies.filterTransform((body, iBody): Optional<{ iBody: number, gravity: Position, gravityType: "strong" | "applied weak" | "ignored weak", }> => {
+                if (body.type === AstralBodyType.Asteroid) return nullopt;
+
+                const transformPartial = { q: body.position.q - hex.intersectedPosition.q, r: body.position.r - hex.intersectedPosition.r };
+                const transform = { ...transformPartial, s: -(transformPartial.q + transformPartial.r) };
+                const distance = (Math.abs(transform.q) + Math.abs(transform.r) + Math.abs(transform.s)) / 2;
+                if (body.type === AstralBodyType.Planet) {
+                  if (distance != 1) return nullopt;
+                  return opt({
+                    iBody,
+                    gravity: transformPartial,
+                    gravityType: (() => {
+                      if (!body.weakGravity) return "strong";
+                      if (handledFirstWeakGravityBodyIndices.includes(iBody)) return "applied weak";
+                      handledFirstWeakGravityBodyIndices.push(iBody);
+                      if (h.ignoredFirstWeakGravityBodyIndices.includes(iBody)) return "ignored weak";
+                      else return "applied weak";
+                    })(),
+                  });
+                }
+
+                satisfiesCheck<AstralBodyType.Sun>(body.type);
+                if (distance == 1) {
+                  return opt({ iBody, gravity: { q: transform.q * 2, r: transform.r * 2 }, gravityType: "strong" });
+                } else if (distance == 2) {
+                  if (Math.abs(transform.q) == 1 || Math.abs(transform.r) == 1) return opt({ body, iBody, gravity: transformPartial, gravityType: "strong" });
+                  else return opt({ iBody, gravity: { q: transform.q / 2, r: transform.r / 2 }, gravityType: "strong" })
+                }
+                else return nullopt;
+              });
+
+              const netStrong = gravityBodies.filter(b => b.gravityType === "strong").map(g => g.gravity).reduce(addPositions, { q: 0, r: 0 });
+              const netWeak = gravityBodies.filter(b => b.gravityType !== "strong").map(g => g.gravity).reduce(addPositions, { q: 0, r: 0 });
+              const netAppliedWeak = gravityBodies.filter(b => b.gravityType === "applied weak").map(g => g.gravity).reduce(addPositions, { q: 0, r: 0 });
+
+              return {
+                position: hex.intersectedPosition,
+                netStrong,
+                netWeak,
+                netAppliedWeak,
+                net: { q: netStrong.q + netAppliedWeak.q, r: netStrong.r + netAppliedWeak.r },
+                bodies: gravityBodies,
+              };
+            })
+            .filter(h => h.bodies.length > 0);
+        const gravityAppliedFromLast = {
+          gravityHexes,
+          net: gravityHexes.map(h => h.net).reduce(addPositions, { q: 0, r: 0 }),
+        };
+        const netTransform = addPositions(
+          momentumAppliedFromLast,
+          h.thrust.hasValue === false ? gravityAppliedFromLast.net : addPositions(gravityAppliedFromLast.net,
+            h.thrust.value));
         historyMemoizations.current.push({
-          startPosition: lastMemoization.endPosition,
-          momentumAppliedFromLast: lastMemoization.netTransform,
-  
+          startPosition,
+          momentumAppliedFromLast,
+          gravityAppliedFromLast,
+          netTransform,
+          endPosition: addPositions(startPosition, netTransform),
         });
+        console.log(`push memo ${JSON.stringify(historyMemoizations.current[historyMemoizations.current.length - 1])}`);
       });
-  }, [history]);
-  */
+  };
+
+  const lastHistory = historyMemoizations.current[historyMemoizations.current.length - 1];
+  const shipPositionPartial =
+    lastHistory === undefined
+      ? appStartingPosition
+      : lastHistory.endPosition;
+  const shipPosition = { ...shipPositionPartial, s: -(shipPositionPartial.q + shipPositionPartial.r) };
+
+  console.log(`render ${JSON.stringify({ shipPosition, history, memos: historyMemoizations.current.length })}`);
 
   // Distance from one vertex to the opposite vertex in svg user space. (discovered by messing around with react-hexgrid)
   const unitsPerVertexDiameter = 2;
@@ -501,38 +677,106 @@ export default function App({ }: AppProps) {
                   r={hex.hex.r}
                   s={hex.hex.s}
                   onClick={() => {
-                    if (destination.hasValue) return;
+                    const transform = { q: hex.hex.q - shipPosition.q, r: hex.hex.r - shipPosition.r, s: hex.hex.s - shipPosition.s };
+                    const distance = (Math.abs(transform.q) + Math.abs(transform.r) + Math.abs(transform.s)) / 2;
+                    console.log(`click ${JSON.stringify({ hex, shipPosition, distance })}`);
+                    if (distance > 1) return;
 
-                    setDestination(opt({ q: hex.hex.q, r: hex.hex.r }));
+                    setHistory([
+                      ...history,
+                      {
+                        thrust:
+                          distance == 0
+                            ? nullopt
+                            : opt_(throwOnNullopt(positionToSide(transform), "bad thrust side")),
+                        ignoredFirstWeakGravityBodyIndices: [],
+                      },
+                    ]);
+
+                    console.log("set history");
                   }}
                 >
                   {hex.children}
                   {
                     (() => {
-                      const highlighting = ((): "important" | "not important" | "none" => {
-                        if (highlighted.length == 0 && appStartingPosition.q == hex.hex.q && appStartingPosition.r == hex.hex.r) return "important";
-                        const hexHighlightings = highlighted.filterTransform((h): Optional<"important" | "not important"> =>
-                          (h.position.q == hex.hex.q && h.position.r == hex.hex.r)
-                            ? opt(h.important ? "important" : "not important")
-                            : nullopt
-                        );
-
-                        const [firstHighlighting, secondHighlighting] = hexHighlightings;
-                        if (firstHighlighting === undefined) return "none";
-                        if (secondHighlighting !== undefined) throw `bad highlightings ${JSON.stringify(hexHighlightings)}`;
-                        return firstHighlighting;
-                      })();
-
-                      if (highlighting === "none") return undefined;
-
-                      return <circle
-                        cx="0"
-                        cy="0"
-                        r={unitsPerFaceDiameter / 2}
-                        fill="pink"
-                        fillOpacity={highlighting === "important" ? 1.0 : satisfiesCheck<"not important">(highlighting)(0.3)}
+                      if (!(shipPosition.q == hex.hex.q && shipPosition.r == hex.hex.r)) return undefined;
+                      const width = unitsPerFaceDiameter / 2 * 1;
+                      return <rect
+                        x={-width / 2}
+                        y={-width / 2}
+                        width={width}
+                        height={width}
+                        fill={"pink"}
+                        fillOpacity="1.0"
                       />;
                     })()
+                  }
+                  {
+                    history.takeZip(historyMemoizations.current)
+                      .flatMap(([h, m], i) => {
+                        if (!(hex.hex.q == m.startPosition.q && hex.hex.r == m.startPosition.r)) return [];
+                        const dx = unitsPerVertexSpacing * (m.netTransform.q);
+                        const dy = unitsPerFaceDiameter * (m.netTransform.r + m.netTransform.q / 2);
+                        const d = Math.sqrt(dx * dx + dy * dy);
+                        const scale = (d - unitsPerFaceDiameter * 0.3) / d;
+                        return [
+                          <Arrow
+                            key={`${i}transform`}
+                            x2={unitsPerVertexSpacing * (m.netTransform.q) * scale}
+                            y2={unitsPerFaceDiameter * (m.netTransform.r + m.netTransform.q / 2) * scale}
+                            color="white"
+                            strokeWidth={0.2}
+                            opacity={Math.max(0, 1 + (i - history.length + 1) / 10)}
+                          />,
+                          ...(() => {
+                            if (history.length - i > 5) return [];
+                            const subArrows: ({ props: ArrowProps } & { transform: Position, key: string })[] = [
+                              {
+                                key: "momentum",
+                                transform: m.momentumAppliedFromLast,
+                                props: {
+                                  color: "green",
+                                  strokeWidth: 0.1,
+                                  opacity: 0.5,
+                                },
+                              },
+                              {
+                                key: "gravity",
+                                transform: m.gravityAppliedFromLast.net,
+                                props: {
+                                  color: "#600c94",
+                                  strokeWidth: 0.1,
+                                  opacity: 0.7,
+                                }
+                              },
+                              {
+                                key: "thrust",
+                                transform: h.thrust.hasValue ? h.thrust.value : { q: 0, r: 0 },
+                                props: {
+                                  color: "orange",
+                                  strokeWidth: 0.13,
+                                  opacity: 0.8,
+                                },
+                              },
+                            ];
+
+                            let pos = { x: 0, y: 0 };
+                            return subArrows.filter(a => !(a.transform.q == 0 && a.transform.r == 0)).map(a => {
+                              const startPos = pos;
+                              pos = { x: pos.x + unitsPerVertexSpacing * a.transform.q, y: pos.y + unitsPerFaceDiameter * (a.transform.r + a.transform.q / 2) };
+                              return <Arrow
+                                key={`${i}${a.key}`}
+                                x1={startPos.x}
+                                y1={startPos.y}
+                                x2={pos.x}
+                                y2={pos.y}
+                                color={a.props.color}
+                                {...a.props}
+                              />;
+                            });
+                          })()
+                        ];
+                      })
                   }
                 </Hexagon>
               ))

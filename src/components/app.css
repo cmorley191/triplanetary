@@ -30,6 +30,9 @@ svg g.hexagon polygon {
   stroke-opacity: 0.5;
   transition: fill-opacity .2s;
 }
+svg polygon.arrowhead {
+  fill-opacity: 1;
+}
 svg g text {
   font-size: 0.3em;
   fill: white;
