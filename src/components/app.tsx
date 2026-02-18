@@ -31,11 +31,11 @@ export function getQRangeOfR(r: number): { minInclusive: number, maxExclusive: n
 
 function addPositions(a: Position, b: Position) { return { q: a.q + b.q, r: a.r + b.r }; }
 
-function positionToSide(p: Position): Optional<Side> {
+export function positionToSide(p: Position): Optional<Side> {
   return optFromUndefable(sides.filter(s => s.q == p.q && s.r == p.r)[0]);
 }
 
-function throwOnNullopt<T>(o: Optional<T>, err: string): T {
+export function throwOnNullopt<T>(o: Optional<T>, err: string): T {
   if (o.hasValue === false) throw err;
   return o.value;
 }
@@ -478,11 +478,155 @@ const Arrow: React.FC<ArrowProps> = ({
 };
 
 
+function physicsStep(
+  thrust: Position,
+  ignoredFirstWeakGravityBodyIndices: number[],
+  lastPosition: Position,
+  position: Position
+) {
+  const handledFirstWeakGravityBodyIndices: number[] = [];
+  const hexInteractions =
+    getHexInteractions({ start: lastPosition, end: position })
+      .interactions.filterTransform(onlyIntersectionInteractionsFilterTransform);
+  const gravityHexes =
+    hexInteractions
+      .skip(hexInteractions.length == 1 ? 0 : 1)
+      .map(hex => {
+        const gravityBodies = astralBodies.filterTransform((body, iBody): Optional<{ iBody: number, gravity: Position, gravityType: "strong" | "applied weak" | "ignored weak", }> => {
+          if (body.type === AstralBodyType.Asteroid) return nullopt;
 
+          const transformPartial = { q: body.position.q - hex.intersectedPosition.q, r: body.position.r - hex.intersectedPosition.r };
+          const transform = { ...transformPartial, s: -(transformPartial.q + transformPartial.r) };
+          const distance = (Math.abs(transform.q) + Math.abs(transform.r) + Math.abs(transform.s)) / 2;
+          if (body.type === AstralBodyType.Planet) {
+            if (distance != 1) return nullopt;
+            return opt({
+              iBody,
+              gravity: transformPartial,
+              gravityType: (() => {
+                if (!body.weakGravity) return "strong";
+                if (handledFirstWeakGravityBodyIndices.includes(iBody)) return "applied weak";
+                handledFirstWeakGravityBodyIndices.push(iBody);
+                if (ignoredFirstWeakGravityBodyIndices.includes(iBody)) return "ignored weak";
+                else return "applied weak";
+              })(),
+            });
+          }
+
+          satisfiesCheck<AstralBodyType.Sun>(body.type);
+          if (distance == 1) {
+            return opt({ iBody, gravity: { q: transform.q * 2, r: transform.r * 2 }, gravityType: "strong" });
+          } else if (distance == 2) {
+            if (Math.abs(transform.q) == 1 || Math.abs(transform.r) == 1) return opt({ body, iBody, gravity: transformPartial, gravityType: "strong" });
+            else return opt({ iBody, gravity: { q: transform.q / 2, r: transform.r / 2 }, gravityType: "strong" })
+          }
+          else return nullopt;
+        });
+
+        const netStrong = gravityBodies.filter(b => b.gravityType === "strong").map(g => g.gravity).reduce(addPositions, { q: 0, r: 0 });
+        const netWeak = gravityBodies.filter(b => b.gravityType !== "strong").map(g => g.gravity).reduce(addPositions, { q: 0, r: 0 });
+        const netAppliedWeak = gravityBodies.filter(b => b.gravityType === "applied weak").map(g => g.gravity).reduce(addPositions, { q: 0, r: 0 });
+
+        return {
+          position: hex.intersectedPosition,
+          netStrong,
+          netWeak,
+          netAppliedWeak,
+          net: { q: netStrong.q + netAppliedWeak.q, r: netStrong.r + netAppliedWeak.r },
+          bodies: gravityBodies,
+        };
+      })
+      .filter(h => h.bodies.length > 0);
+  const momentumAppliedFromLast = { q: position.q - lastPosition.q, r: position.r - lastPosition.r };
+  const gravityAppliedFromLast = {
+    gravityHexes,
+    net: gravityHexes.map(h => h.net).reduce(addPositions, { q: 0, r: 0 }),
+  };
+  const netTransform =
+    addPositions(momentumAppliedFromLast,
+      addPositions(gravityAppliedFromLast.net,
+        thrust));
+  return {
+    momentumAppliedFromLast,
+    gravityAppliedFromLast,
+    netTransform,
+    endPosition: addPositions(position, netTransform),
+  };
+}
+
+export function logAllPossibleOrbits(horizon: number, momentum: number = 4) {
+  const checkedCache = new Set<string>();
+  const stateToCacheKey = (position: Position, momentum: Position) => `${position.q},${position.r},${momentum.q},${momentum.r}`;
+  for (let startQ = 0; startQ < mapSize.width; startQ++) {
+    const startRRange = getRRangeOfQ(startQ);
+    //console.log(`Checking ${JSON.stringify({ startQ })}`);
+    for (let startR = startRRange.minInclusive; startR < startRRange.maxExclusive; startR++) {
+      const position0 = { q: startQ, r: startR };
+      if (astralBodies.some(b => b.position.q == position0.q && b.position.r == position0.r)) continue;
+      for (let lastQOffset = -momentum; lastQOffset <= momentum; lastQOffset++) {
+        for (let lastROffset = -momentum * 1.5; lastROffset <= momentum * 1.5; lastROffset++) {
+          const position1 = { q: startQ + lastQOffset, r: startR + lastROffset };
+          const ignoresToCheck: { iStep: number, iBody: number }[][] = [[]];
+          while (true) {
+            const ignores = ignoresToCheck.pop();
+            if (ignores === undefined) break;
+            const orbit: string[] = [];
+            let lastPosition = position0;
+            let position = position1;
+            for (let iStep = 0; iStep < horizon * 2; iStep++) {
+              if (astralBodies.some(b => b.position.q == position.q && b.position.r == position.r)) break;
+              const stepIgnores = ignores.filter(i => i.iStep == iStep).map(i => i.iBody);
+              const step = physicsStep(
+                { q: 0, r: 0 },
+                stepIgnores,
+                lastPosition,
+                position,
+              );
+              const nextCacheKey = stateToCacheKey(step.endPosition, step.netTransform);
+
+
+              if (stepIgnores.length == 0 && step.gravityAppliedFromLast.gravityHexes.some(h => h.bodies.some(b => b.gravityType !== "strong"))) {
+                const weakBodies = new Set(step.gravityAppliedFromLast.gravityHexes.flatMap(h => h.bodies.filter(b => b.gravityType !== "strong").map(b => b.iBody)));
+
+                [...weakBodies].permute().forEach(permutation => {
+                  ignoresToCheck.push([...ignores, ...permutation.map(iBody => ({ iStep, iBody }))]);
+                });
+              }
+
+              orbit.push(nextCacheKey);
+
+              const [orbit0, orbit1] = orbit;
+              if (orbit0 !== undefined && orbit1 !== undefined
+                && nextCacheKey == orbit0
+              ) {
+                if (nextCacheKey != orbit1) {
+                  console.log(`Orbit: ${JSON.stringify({ position0, position1, length: iStep, ignores })}`)
+                  break;
+                }
+              } else {
+                if (checkedCache.has(nextCacheKey)) break;
+                if (orbit.length < horizon) checkedCache.add(nextCacheKey);
+              }
+
+              lastPosition = position;
+              position = step.endPosition;
+            }
+          }
+        }
+      }
+    }
+  }
+}
 
 type AppProps = {};
 export default function App({ }: AppProps) {
-  const appStartingPosition = React.useMemo<Position>(() => {
+  /*
+  React.useEffect(() => {
+    logAllPossibleOrbits(20);
+  }, []);
+  */
+
+  const [appStartingPosition, setAppStartingPosition] = React.useState<Position>(() => {
     while (true) {
       const q = getRandomInt(mapSize.width);
       const rRange = getRRangeOfQ(q);
@@ -492,10 +636,10 @@ export default function App({ }: AppProps) {
       }
       return { q, r };
     }
-  }, []);
+  });
 
   const [history, setHistoryRaw] = React.useState<{
-    thrust: Optional<Side>,
+    thrust: Position,
     ignoredFirstWeakGravityBodyIndices: number[],
   }[]>([]);
 
@@ -528,84 +672,23 @@ export default function App({ }: AppProps) {
       .skip(historyMemoizations.current.length)
       .forEach(h => {
         const lastStoredMemoization = historyMemoizations.current[historyMemoizations.current.length - 1];
-        const { startPosition: lastStartPosition, endPosition: startPosition, netTransform: momentumAppliedFromLast } =
+        const { startPosition: lastPosition, endPosition: position } =
           lastStoredMemoization === undefined
             ? {
               startPosition: appStartingPosition,
               endPosition: appStartingPosition,
-              netTransform: { q: 0, r: 0 } as Position,
             }
             : lastStoredMemoization;
-        const handledFirstWeakGravityBodyIndices: number[] = [];
-        const hexInteractions =
-          getHexInteractions({ start: lastStartPosition, end: startPosition })
-            .interactions.filterTransform(onlyIntersectionInteractionsFilterTransform);
-        const gravityHexes =
-          getHexInteractions({ start: lastStartPosition, end: startPosition })
-            .interactions.filterTransform(onlyIntersectionInteractionsFilterTransform)
-            .skip(hexInteractions.length == 1 ? 0 : 1)
-            .map(hex => {
-              const gravityBodies = astralBodies.filterTransform((body, iBody): Optional<{ iBody: number, gravity: Position, gravityType: "strong" | "applied weak" | "ignored weak", }> => {
-                if (body.type === AstralBodyType.Asteroid) return nullopt;
-
-                const transformPartial = { q: body.position.q - hex.intersectedPosition.q, r: body.position.r - hex.intersectedPosition.r };
-                const transform = { ...transformPartial, s: -(transformPartial.q + transformPartial.r) };
-                const distance = (Math.abs(transform.q) + Math.abs(transform.r) + Math.abs(transform.s)) / 2;
-                if (body.type === AstralBodyType.Planet) {
-                  if (distance != 1) return nullopt;
-                  return opt({
-                    iBody,
-                    gravity: transformPartial,
-                    gravityType: (() => {
-                      if (!body.weakGravity) return "strong";
-                      if (handledFirstWeakGravityBodyIndices.includes(iBody)) return "applied weak";
-                      handledFirstWeakGravityBodyIndices.push(iBody);
-                      if (h.ignoredFirstWeakGravityBodyIndices.includes(iBody)) return "ignored weak";
-                      else return "applied weak";
-                    })(),
-                  });
-                }
-
-                satisfiesCheck<AstralBodyType.Sun>(body.type);
-                if (distance == 1) {
-                  return opt({ iBody, gravity: { q: transform.q * 2, r: transform.r * 2 }, gravityType: "strong" });
-                } else if (distance == 2) {
-                  if (Math.abs(transform.q) == 1 || Math.abs(transform.r) == 1) return opt({ body, iBody, gravity: transformPartial, gravityType: "strong" });
-                  else return opt({ iBody, gravity: { q: transform.q / 2, r: transform.r / 2 }, gravityType: "strong" })
-                }
-                else return nullopt;
-              });
-
-              const netStrong = gravityBodies.filter(b => b.gravityType === "strong").map(g => g.gravity).reduce(addPositions, { q: 0, r: 0 });
-              const netWeak = gravityBodies.filter(b => b.gravityType !== "strong").map(g => g.gravity).reduce(addPositions, { q: 0, r: 0 });
-              const netAppliedWeak = gravityBodies.filter(b => b.gravityType === "applied weak").map(g => g.gravity).reduce(addPositions, { q: 0, r: 0 });
-
-              return {
-                position: hex.intersectedPosition,
-                netStrong,
-                netWeak,
-                netAppliedWeak,
-                net: { q: netStrong.q + netAppliedWeak.q, r: netStrong.r + netAppliedWeak.r },
-                bodies: gravityBodies,
-              };
-            })
-            .filter(h => h.bodies.length > 0);
-        const gravityAppliedFromLast = {
-          gravityHexes,
-          net: gravityHexes.map(h => h.net).reduce(addPositions, { q: 0, r: 0 }),
-        };
-        const netTransform = addPositions(
-          momentumAppliedFromLast,
-          h.thrust.hasValue === false ? gravityAppliedFromLast.net : addPositions(gravityAppliedFromLast.net,
-            h.thrust.value));
         historyMemoizations.current.push({
-          startPosition,
-          momentumAppliedFromLast,
-          gravityAppliedFromLast,
-          netTransform,
-          endPosition: addPositions(startPosition, netTransform),
+          startPosition: position,
+          ...physicsStep(
+            h.thrust,
+            h.ignoredFirstWeakGravityBodyIndices,
+            lastPosition,
+            position,
+          ),
         });
-        console.log(`push memo ${JSON.stringify(historyMemoizations.current[historyMemoizations.current.length - 1])}`);
+        //console.log(`push memo ${JSON.stringify(historyMemoizations.current[historyMemoizations.current.length - 1])}`);
       });
   };
 
@@ -616,7 +699,7 @@ export default function App({ }: AppProps) {
       : lastHistory.endPosition;
   const shipPosition = { ...shipPositionPartial, s: -(shipPositionPartial.q + shipPositionPartial.r) };
 
-  console.log(`render ${JSON.stringify({ shipPosition, history, memos: historyMemoizations.current.length })}`);
+  //console.log(`render ${JSON.stringify({ shipPosition, history, memos: historyMemoizations.current.length })}`);
 
   // Distance from one vertex to the opposite vertex in svg user space. (discovered by messing around with react-hexgrid)
   const unitsPerVertexDiameter = 2;
@@ -680,23 +763,34 @@ export default function App({ }: AppProps) {
                     const transform = { q: hex.hex.q - shipPosition.q, r: hex.hex.r - shipPosition.r, s: hex.hex.s - shipPosition.s };
                     const distance = (Math.abs(transform.q) + Math.abs(transform.r) + Math.abs(transform.s)) / 2;
                     console.log(`click ${JSON.stringify({ hex, shipPosition, distance })}`);
-                    if (distance > 1) return;
-
-                    setHistory([
-                      ...history,
-                      {
-                        thrust:
-                          distance == 0
-                            ? nullopt
-                            : opt_(throwOnNullopt(positionToSide(transform), "bad thrust side")),
-                        ignoredFirstWeakGravityBodyIndices: [],
-                      },
-                    ]);
-
-                    console.log("set history");
+                    if (distance <= 2) {
+                      setHistory([
+                        ...history,
+                        {
+                          thrust: transform,
+                          ignoredFirstWeakGravityBodyIndices: [],
+                        },
+                      ]);
+                    } else {
+                      setAppStartingPosition({ q: hex.hex.q, r: hex.hex.r });
+                      setHistoryRaw([]);
+                      historyMemoizations.current = [];
+                    }
                   }}
                 >
                   {hex.children}
+                  {
+                    (() => {
+                      if (!(hex.hex.q % 10 == 0 && hex.hex.r % 10 == 0)) return undefined;
+                      return <circle
+                        cx="0"
+                        cy="0"
+                        r={unitsPerFaceDiameter / 2 * 0.1}
+                        fill="white"
+                        fillOpacity="0.3"
+                      />
+                    })()
+                  }
                   {
                     (() => {
                       if (!(shipPosition.q == hex.hex.q && shipPosition.r == hex.hex.r)) return undefined;
@@ -751,7 +845,7 @@ export default function App({ }: AppProps) {
                               },
                               {
                                 key: "thrust",
-                                transform: h.thrust.hasValue ? h.thrust.value : { q: 0, r: 0 },
+                                transform: h.thrust,
                                 props: {
                                   color: "orange",
                                   strokeWidth: 0.13,
@@ -783,6 +877,6 @@ export default function App({ }: AppProps) {
           }
         </Layout>
       </HexGrid>
-    </div>
+    </div >
   );
 }

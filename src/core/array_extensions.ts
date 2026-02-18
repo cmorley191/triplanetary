@@ -31,6 +31,8 @@ declare global {
     padLeft(args: { toLength: number, getPadElement: (i: number) => T }): T[]
     padRight(args: { toLength: number, getPadElement: (i: number, arrayIndex: number) => T }): T[]
 
+    permute(): T[][]
+
     /**
      * Splits the array into two arrays `[trues, falses]` using the predicate.
      * The first array contains elements that predicate returned `true` for,
@@ -126,6 +128,26 @@ Array.prototype.padRight = function <T>(this: T[], args: { toLength: number, get
   );
 }
 
+Array.prototype.permute = function <T>(this: T[]) {
+  const results: T[][] = [];
+
+  function backtrack(path: T[], remaining: T[]) {
+    if (remaining.length === 0) {
+      results.push([...path]);
+      return;
+    }
+
+    remaining.forEach((x, i) => {
+      path.push(x);
+      const nextRemaining = remaining.slice(0, i).concat(remaining.slice(i + 1));
+      backtrack(path, nextRemaining);
+      path.pop();
+    });
+  }
+
+  backtrack([], this);
+  return results;
+}
 
 Array.prototype.shallowCopy = function <T>(this: T[]) {
   return [...this];
