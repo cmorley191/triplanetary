@@ -2,12 +2,42 @@ import { CSSProperties } from "react";
 
 export enum Axis { Q, R, S }
 
+export type Position = { q: number, r: number }
+
+export type SideN = { q: 0, r: -1 }
+export const sideN: SideN = { q: 0, r: -1 };
+export type SideNE = { q: 1, r: -1 }
+export const sideNE: SideNE = { q: 1, r: -1 };
+export type SideSE = { q: 1, r: 0 }
+export const sideSE: SideSE = { q: 1, r: 0 };
+export type SideS = { q: 0, r: 1 }
+export const sideS: SideS = { q: 0, r: 1 };
+export type SideSW = { q: -1, r: 1 }
+export const sideSW: SideSW = { q: -1, r: 1 };
+export type SideNW = { q: -1, r: 0 }
+export const sideNW: SideNW = { q: -1, r: 0 };
+export type Side = SideN | SideNE | SideSE | SideS | SideSW | SideNW
+
+export type CornerNE = { q: 1, r: -2 }
+export const cornerNE: CornerNE = { q: 1, r: -2 };
+export type CornerE = { q: 2, r: -1 }
+export const cornerE: CornerE = { q: 2, r: -1 };
+export type CornerSE = { q: 1, r: 1 }
+export const cornerSE: CornerSE = { q: 1, r: 1 };
+export type CornerSW = { q: -1, r: 2 }
+export const cornerSW: CornerSW = { q: -1, r: 2 };
+export type CornerW = { q: -2, r: 1 }
+export const cornerW: CornerW = { q: -2, r: 1 };
+export type CornerNW = { q: -1, r: -1 }
+export const cornerNW: CornerNW = { q: -1, r: -1 };
+export type Corner = CornerNE | CornerE | CornerSE | CornerSW | CornerW | CornerNW
+
 export enum AstralBodyType { Sun, Planet, Asteroid }
 
 export type AstralBody =
   & {
     name: string,
-    position: { q: number, r: number },
+    position: Position,
     /// The original game board have some wonky radii, they are stored here for posterity
     /// while the next parameter is a more realistic value / based on my own preferences.
     faceFillOriginal: number,
@@ -23,7 +53,7 @@ export type AstralBody =
       bases:
       | { count: 0 | 6 }
       | { count: 2, axis: Axis }
-      | { count: 1, side: { q: number, r: number } }
+      | { count: 1, side: Side }
     }
   )
 

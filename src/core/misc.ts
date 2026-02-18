@@ -1,4 +1,8 @@
 
+export function satisfiesCheck<AssertType>(_checkValue: AssertType): <ReturnType>(returnValue: ReturnType) => ReturnType {
+  return (returnValue) => returnValue;
+}
+
 /**
  * Returns a copy of the given object with the specified keys removed (if they are present).
  * 
@@ -25,4 +29,95 @@ export function omitAttrs(omit: string[], obj: any): { [otherOptions: string]: u
  */
 export function getRandomInt(max: number) {
   return Math.floor(Math.random() * max);
+}
+
+/**
+ * Returns the min and max of the given numbers.
+ */
+export function minmax(a: number, b: number): { min: number, max: number } {
+  if (a <= b) return { min: a, max: b };
+  else return { min: b, max: a };
+}
+
+export function* unionGeneratorElement<T1, T2, U, V>(g: Generator<T1, U, V> | Generator<T2, U, V>): Generator<T1 | T2, U, V> {
+  const firstElement = g.next();
+  if (firstElement.done) {
+    return firstElement.value;
+  }
+  let n = yield firstElement.value;
+  while (true) {
+    const element = g.next(n);
+    if (element.done) {
+      return element.value;
+    }
+    n = yield element.value;
+  }
+}
+
+export function* unionGeneratorReturn<T, U1, U2, V>(g: Generator<T, U1, V> | Generator<T, U2, V>): Generator<T, U1 | U2, V> {
+  const firstElement = g.next();
+  if (firstElement.done) {
+    return firstElement.value;
+  }
+  let n = yield firstElement.value;
+  while (true) {
+    const element = g.next(n);
+    if (element.done) {
+      return element.value;
+    }
+    n = yield element.value;
+  }
+}
+
+export function* unionGenerator2<T1, T2, U1, U2, V>(g: Generator<T1, U1, V> | Generator<T2, U2, V>): Generator<T1 | T2, U1 | U2, V> {
+  const firstElement = g.next();
+  if (firstElement.done) {
+    return firstElement.value;
+  }
+  let n = yield firstElement.value;
+  while (true) {
+    const element = g.next(n);
+    if (element.done) {
+      return element.value;
+    }
+    n = yield element.value;
+  }
+}
+export function* unionGenerator3<T1, T2, T3, U1, U2, U3, V>(g: Generator<T1, U1, V> | Generator<T2, U2, V> | Generator<T3, U3, V>): Generator<T1 | T2 | T3, U1 | U2 | U3, V> {
+  const firstElement = g.next();
+  if (firstElement.done) {
+    return firstElement.value;
+  }
+  let n = yield firstElement.value;
+  while (true) {
+    const element = g.next(n);
+    if (element.done) {
+      return element.value;
+    }
+    n = yield element.value;
+  }
+}
+
+export function mixGeneratorElement<T1, T2, U1, U2, V>(g: Generator<T1, U1, V> | Generator<T2, U2, V>): Generator<T1 | T2, U1, V> | Generator<T1 | T2, U2, V> {
+  return g;
+}
+
+export function mixGeneratorReturn<T1, T2, U1, U2, V>(g: Generator<T1, U1, V> | Generator<T2, U2, V>): Generator<T1, U1 | U2, V> | Generator<T2, U1 | U2, V> {
+  return g;
+}
+
+export function fullyUnpackGenerator<T, U>(g: Generator<T, U, void>): (T | U)[] {
+  const elements: (T | U)[] = [];
+  while (true) {
+    const element = g.next();
+    if (element.done === true) {
+      if (element.value === undefined) {
+        return elements;
+      }
+    }
+    elements.push(element.value);
+    if (element.done === true) {
+      return elements;
+    }
+  }
 }
