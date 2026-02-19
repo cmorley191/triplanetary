@@ -401,12 +401,16 @@ export default function App({ }: AppProps) {
               const result = tuple2([left, right]);
               return result;
             });
-            const iSide = weightedRandom(
-              sideNeighbors.takeZip(sideCornerNeighbors).map(p =>
-                (f.astralBody ? 0 : 1)
-                + (!p[0].hasValue ? 0 : p[0].value.dense ? 9 : 6)
-                + p[1].reduce((a, b) => a + (!b.hasValue ? 0 : f.astralBody ? 0.25 : b.value.dense ? 2.5 : 1.5), 0)
-              ));
+            const iSide =
+              throwOnNullopt(
+                weightedRandom(
+                  sideNeighbors.takeZip(sideCornerNeighbors).map(p =>
+                    (f.astralBody ? 0 : 1)
+                    + (!p[0].hasValue ? 0 : p[0].value.dense ? 9 : 6)
+                    + p[1].reduce((a, b) => a + (!b.hasValue ? 0 : f.astralBody ? 0.25 : b.value.dense ? 2.5 : 1.5), 0)
+                  )),
+                "sideNeighbors wrong size"
+              );
             const neighbor = throwOnNullopt(sideNeighbors.get(iSide), "sideNeighbors wrong size");
             const maxThetaVariation = Math.PI / 6;
             const thetaVariation = lerp(-maxThetaVariation, maxThetaVariation, Math.random());

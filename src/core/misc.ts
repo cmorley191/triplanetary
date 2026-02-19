@@ -1,13 +1,26 @@
-import { nullopt, nullopt_, opt, optValueOr } from "./optional";
+import { nullopt, nullopt_, opt, Optional, optValueOr } from "./optional";
 
+/**
+ * Does nothing / passthrough at runtime. Causes a compile error (assuming strict mode) if the passed in value is not of the specified type.
+ *
+ * Useful for pinning an object's type, in case changes in other parts of the code change its type without you realizing 
+ * (e.g. adding an enum member might change the final case in an if-chain from `MyEnum.LastRemainingValue` to include `| MyEnum.NewUnhandledValue`
+ * without either writer realizing they need to handle a new case).
+ */
 export function satisfiesCheck<AssertType>(_checkValue: AssertType): <ReturnType>(returnValue: ReturnType) => ReturnType {
-  return (returnValue) => returnValue;
+  return returnValue => returnValue;
 }
-
+/**
+ * Like satisfiesCheck, but the same value is being checked and returned, whereas satisfiedCheck can check one value and return another.
+ */
 export function assertType<AssertType>(x: AssertType): AssertType {
   return x;
 }
 
+/**
+ * Constraining a type that might be automatically broadened by the compiler when you don't want it to.
+ * e.g. Force a type alias to show up instead of the raw type, or prevent a tuple type from from automatically being inferred as an array type.
+ */
 export function asType<T>(): <U extends T>(x: U) => T {
   return x => x;
 }
@@ -115,6 +128,9 @@ export function mixGeneratorReturn<T1, T2, U1, U2, V>(g: Generator<T1, U1, V> | 
   return g;
 }
 
+/**
+ * Iterates a generator into a list, but also includes the final return value, not just the elements.
+ */
 export function fullyUnpackGenerator<T, U>(g: Generator<T, U, void>): (T | U)[] {
   const elements: (T | U)[] = [];
   while (true) {
@@ -131,35 +147,45 @@ export function fullyUnpackGenerator<T, U>(g: Generator<T, U, void>): (T | U)[] 
   }
 }
 
-export function weightedRandom(weights: number[]): number {
-  const sum = weights.reduce((a, b) => a + b);
-  if (sum <= 0 || weights.some(x => x < 0)) return getRandomInt(weights.length);
-  let v = Math.random() * sum;
-  return optValueOr(
-    weights.reduce(
-      (chosen, w, i) => {
-        if (chosen.hasValue) return chosen;
-        v -= w;
-        if (v <= 0) return opt(i);
-        else return nullopt;
-      },
-      nullopt_<number>()
-    ),
-    weights.length - 1
-  )
+/**
+ * Returns a random index of the given weight array (randomly selected via those weights).
+ * nullopt is returned if empty list.
+ * Negative weights are treated as zero.
+ * Index chosen uniformly if all zero weights.
+ */
+export function weightedRandom(weights: number[]): Optional<number> {
+  if (weights.length == 0) return nullopt;
+  const positiveIndices = weights.filterTransform((w, i) => w > 0 ? opt(i) : nullopt);
+  const defaultResult = positiveIndices.get(positiveIndices.length - 1);
+  if (!defaultResult.hasValue) return opt(getRandomInt(weights.length));
+  const nonNegativeWeights = weights.map(w => w < 0 ? 0 : w);
+  let v = Math.random() * nonNegativeWeights.reduce((a, b) => a + b);
+  return opt(
+    optValueOr(
+      nonNegativeWeights.reduce(
+        (chosen, w, i) => {
+          if (chosen.hasValue) return chosen;
+          v -= w;
+          if (v <= 0) return opt(i);
+          else return nullopt;
+        },
+        nullopt_<number>()
+      ),
+      defaultResult.value
+    )
+  );
 }
 
 export function lerp(a: number, b: number, t: number) {
   return (b - a) * t + a;
 }
 
+export function tuple2<T, U>(t: [T, U]): [T, U] { return t; }
+export function tuple3<T, U, V>(t: [T, U, V]): [T, U, V] { return t; }
+
 export function map2<T, U>(arr: [T, T], mapper: (value: T, index: 0 | 1) => U): [U, U] {
   return [mapper(arr[0], 0), mapper(arr[1], 1)];
 }
-
 export function map3<T, U>(arr: [T, T, T], mapper: (value: T, index: 0 | 1 | 2) => U): [U, U, U] {
   return [mapper(arr[0], 0), mapper(arr[1], 1), mapper(arr[2], 2)];
 }
-
-export function tuple2<T, U>(t: [T, U]): [T, U] { return t; }
-export function tuple3<T, U, V>(t: [T, U, V]): [T, U, V] { return t; }
