@@ -1,6 +1,11 @@
+import { nullopt, opt, Optional, optValueOr } from "./optional";
 
 export function satisfiesCheck<AssertType>(_checkValue: AssertType): <ReturnType>(returnValue: ReturnType) => ReturnType {
   return (returnValue) => returnValue;
+}
+
+export function assertType<AssertType>(x: AssertType): AssertType {
+  return x;
 }
 
 /**
@@ -120,4 +125,22 @@ export function fullyUnpackGenerator<T, U>(g: Generator<T, U, void>): (T | U)[] 
       return elements;
     }
   }
+}
+
+export function weightedRandom(weights: number[]): number {
+  const sum = weights.reduce((a, b) => a + b);
+  if (sum <= 0 || weights.some(x => x < 0)) return getRandomInt(weights.length);
+  let v = Math.random() * sum;
+  return optValueOr(
+    weights.reduce(
+      (chosen, w, i) => {
+        if (chosen.hasValue) return chosen;
+        v -= w;
+        if (v <= 0) return opt(i);
+        else return nullopt;
+      },
+      nullopt as Optional<number>
+    ),
+    weights.length - 1
+  )
 }

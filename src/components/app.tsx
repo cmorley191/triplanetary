@@ -5,9 +5,9 @@ import * as React from "react";
 
 import { HexGrid, Layout, Hexagon, Hex } from 'react-hexgrid';
 
-import { astralBodies, AstralBodyType, Axis, Corner, cornerE, cornerNE, cornerNW, cornerSE, cornerSW, cornerW, Position, Side, sideN, sideNE, sideNW, sides, sideS, sideSE, sideSW } from "../game/game";
+import { asteroidFields, astralBodies, AstralBodyType, Axis, Corner, cornerE, cornerNE, cornerNW, cornerSE, cornerSW, cornerW, Position, Side, sideN, sideNE, sideNW, sides, sideS, sideSE, sideSW } from "../game/game";
 import { nullopt, nullopt_t, opt, opt_, opt_t, optFromUndefable, Optional } from "../core/optional";
-import { fullyUnpackGenerator, getRandomInt, minmax, satisfiesCheck } from '../core/misc';
+import { assertType, fullyUnpackGenerator, getRandomInt, minmax, satisfiesCheck, weightedRandom } from '../core/misc';
 
 
 
@@ -477,6 +477,14 @@ const Arrow: React.FC<ArrowProps> = ({
   );
 };
 
+function throwOnUndef<T>(x: T | undefined, s: string): T {
+  if (x === undefined) throw s;
+  return x;
+}
+
+function lerp(a: number, b: number, t: number) {
+  return (b - a) * t + a;
+}
 
 function physicsStep(
   thrust: Position,
@@ -625,7 +633,6 @@ export default function App({ }: AppProps) {
     logAllPossibleOrbits(20);
   }, []);
   */
-
   const [appStartingPosition, setAppStartingPosition] = React.useState<Position>(() => {
     while (true) {
       const q = getRandomInt(mapSize.width);
@@ -727,6 +734,126 @@ export default function App({ }: AppProps) {
     }
   }
 
+  const generatedAsteroidFields = React.useMemo(() => {
+    const allFields = asteroidFields.map(f => ({ ...f, astralBody: false }))
+      .concat(astralBodies.filter(b => b.type == AstralBodyType.Asteroid).map(b => ({
+        position: b.position,
+        astralBody: true,
+        dense: (() => {
+          const sideNeighbors = sides.map((s) => asteroidFields.filter(f2 => f2.position.q == b.position.q + s.q && f2.position.r == b.position.r + s.r));
+          return (
+            sideNeighbors.some(n => n[0] !== undefined)
+            && (
+              sideNeighbors.filter(n => n[0] !== undefined && n[0].dense).length
+              >= sideNeighbors.filter(n => n[0] !== undefined && !n[0].dense).length
+            )
+          );
+        })(),
+      })));
+    return allFields
+      .map(f => {
+        const asteroids = [];
+
+        const nAsteroids =
+          f.dense
+            ? getRandomInt(15) + 20
+            : getRandomInt(10) + 10;
+
+        const radii = []
+        for (let i = 0; i < nAsteroids; i++) {
+          radii.push(Math.pow(i / (nAsteroids - 1), f.dense ? 1.7 : 2));
+        }
+
+        const sideNeighbors = sides.map((s) => allFields.filter(f2 => f2.position.q == f.position.q + s.q && f2.position.r == f.position.r + s.r));
+
+        const standardShadeRange: [number[], number[]] = [[73, 24, 20], [187, 137, 104]];
+        const denseShadeRange: typeof standardShadeRange = [[55, 60, 89], [204, 206, 225]];
+
+        let centers = 0;
+        for (let i = 0; i < nAsteroids; i++) {
+          const { theta, distance: unclearedDistance, shadeRange } = (() => {
+            const [thisShadeRange, oppositeShadeRange] = f.dense ? [denseShadeRange, standardShadeRange] : [standardShadeRange, denseShadeRange];
+            const outlier = Math.pow(Math.random(), f.dense ? 2.5 : 5);
+            const shadeRange: typeof standardShadeRange = [
+              thisShadeRange[0].takeZip(oppositeShadeRange[0]).map(([a, b]) => lerp(a, b, outlier)),
+              thisShadeRange[1].takeZip(oppositeShadeRange[1]).map(([a, b]) => lerp(a, b, outlier)),
+            ];
+
+            if (
+              !f.astralBody
+              && (
+                nAsteroids - i + centers <= 4
+                || Math.random() < lerp(0, f.dense ? 0.25 : 0.15, sideNeighbors.reduce((a, b) => a + b.length, 0) / 6)
+              )
+            ) {
+              centers += 1;
+              return {
+                theta: Math.random() * Math.PI,
+                distance: lerp(-1 / 3, 1 / 3, Math.random()),
+                shadeRange: shadeRange,
+              };
+            }
+
+            const sideCornerNeighbors = sides.map((_, i) => {
+              const left = throwOnUndef(sideNeighbors[(i + 5) % 6], "should always exist")[0];
+              const right = throwOnUndef(sideNeighbors[(i + 1) % 6], "should always exist")[0];
+              const result: [typeof left, typeof right] = [left, right];
+              return result;
+            });
+            const iSide = weightedRandom(
+              sideNeighbors.takeZip(sideCornerNeighbors).map(p =>
+                (f.astralBody ? 0 : 1)
+                + p[0].reduce((a, b) => a + (b.dense ? 9 : 6), 0)
+                + p[1].reduce((a, b) => a + (b === undefined ? 0 : f.astralBody ? 0.25 : b.dense ? 2.5 : 1.5), 0)
+              ));
+            const neighbor = throwOnUndef(sideNeighbors[iSide], "should always exist")[0];
+            const maxThetaVariation = Math.PI / 6;
+            const thetaVariation = lerp(-maxThetaVariation, maxThetaVariation, Math.random());
+            const cornerNeighbor = throwOnUndef(sideCornerNeighbors[iSide], "should always exist")[thetaVariation > 0 ? 0 : 1];
+            const distance = (neighbor !== undefined && !f.astralBody)
+              ? Math.pow(Math.random(), 0.2)
+              : Math.random();
+
+            return {
+              theta: Math.PI / 2 - iSide * Math.PI / 3 + Math.PI * 2 + thetaVariation,
+              distance,
+              shadeRange:
+                ((): typeof standardShadeRange => {
+                  const neighborShadeRange = neighbor === undefined ? shadeRange : neighbor.dense ? denseShadeRange : standardShadeRange;
+                  const cornerNeighborShadeRange = cornerNeighbor === undefined ? neighborShadeRange : cornerNeighbor.dense ? denseShadeRange : standardShadeRange;
+                  const neighborsShadeRange: typeof standardShadeRange = [
+                    neighborShadeRange[0].takeZip(cornerNeighborShadeRange[0]).map(([a, b]) => lerp(a, b, Math.abs(thetaVariation) / maxThetaVariation)),
+                    neighborShadeRange[1].takeZip(cornerNeighborShadeRange[1]).map(([a, b]) => lerp(a, b, Math.abs(thetaVariation) / maxThetaVariation)),
+                  ];
+                  return [
+                    shadeRange[0].takeZip(neighborsShadeRange[0]).map(([a, b]) => lerp(a, b, Math.pow(distance, 2))),
+                    shadeRange[1].takeZip(neighborsShadeRange[1]).map(([a, b]) => lerp(a, b, Math.pow(distance, 2))),
+                  ];
+                })()
+            };
+          })();
+          const distance =
+            f.astralBody
+              ? Math.sign(unclearedDistance) * ((Math.abs(unclearedDistance) + 5) / 6)
+              : unclearedDistance;
+
+          const radius = Math.min(1, Math.max(0,
+            throwOnUndef(radii.splice(getRandomInt(radii.length), 1)[0], "should always exist")
+            + lerp(-0.1, 0.1, Math.random())
+          ));
+
+          const shade = Math.random();
+          asteroids.push({
+            x: Math.cos(theta) * distance,
+            y: -Math.sin(theta) * distance,
+            radius,
+            shade: assertType<React.SVGProps<SVGCircleElement>['fill']>(`rgb(${shadeRange[0].takeZip(shadeRange[1]).map(d => lerp(d[0], d[1], shade)).join(",")})`),
+          });
+        }
+        return { ...f, asteroids };
+      });
+  }, []);
+
   return (
     <div style={{ margin: 10 }}>
       <HexGrid
@@ -737,30 +864,14 @@ export default function App({ }: AppProps) {
         <Layout origin={{ x: 0, y: 0 }} size={{ x: 1, y: 1 }}>
           {
             hexagons
-              .map((hex, ihex) => ({
-                hex,
-                children:
-                  astralBodies
-                    .filter(body => body.position.q == hex.q && body.position.r == hex.r)
-                    .map(((body, ibody) => (
-                      <circle
-                        key={`${ihex},${ibody}`}
-                        cx="0"
-                        cy="0"
-                        r={unitsPerFaceDiameter / 2 * body.faceFill}
-                        fill={body.color}
-                        fillOpacity="1.0"
-                      />
-                    ))),
-              }))
-              .map((hex, i) => (
+              .map((hex, ihex) => (
                 <Hexagon
-                  key={i}
-                  q={hex.hex.q}
-                  r={hex.hex.r}
-                  s={hex.hex.s}
+                  key={ihex}
+                  q={hex.q}
+                  r={hex.r}
+                  s={hex.s}
                   onClick={() => {
-                    const transform = { q: hex.hex.q - shipPosition.q, r: hex.hex.r - shipPosition.r, s: hex.hex.s - shipPosition.s };
+                    const transform = { q: hex.q - shipPosition.q, r: hex.r - shipPosition.r, s: hex.s - shipPosition.s };
                     const distance = (Math.abs(transform.q) + Math.abs(transform.r) + Math.abs(transform.s)) / 2;
                     console.log(`click ${JSON.stringify({ hex, shipPosition, distance })}`);
                     if (distance <= 2) {
@@ -772,28 +883,60 @@ export default function App({ }: AppProps) {
                         },
                       ]);
                     } else {
-                      setAppStartingPosition({ q: hex.hex.q, r: hex.hex.r });
+                      setAppStartingPosition({ q: hex.q, r: hex.r });
                       setHistoryRaw([]);
                       historyMemoizations.current = [];
                     }
                   }}
                 >
-                  {hex.children}
                   {
+                    generatedAsteroidFields
+                      .filter(f => f.position.q == hex.q && f.position.r == hex.r)
+                      .map(f => {
+                        const radiusRange: [number, number] = [0.01, 0.11];
+                        const spread = 1.3;
+                        return f.asteroids.map(a =>
+                          <circle
+                            cx={a.x * unitsPerFaceDiameter / 2 * (1 - radiusRange[1]) * spread}
+                            cy={a.y * unitsPerFaceDiameter / 2 * (1 - radiusRange[1]) * spread}
+                            r={lerp(radiusRange[0], radiusRange[1], a.radius) * unitsPerVertexDiameter / 2}
+                            fill={a.shade}
+                            fillOpacity="1.0"
+                          />
+                        );
+                      })[0]
+                  }
+                  {
+                    astralBodies
+                      .filter(body => body.position.q == hex.q && body.position.r == hex.r)
+                      .map(((body, ibody) => (
+                        <circle
+                          key={`${ihex},${ibody}`}
+                          cx="0"
+                          cy="0"
+                          r={unitsPerFaceDiameter / 2 * body.faceFill}
+                          fill={body.color}
+                          fillOpacity="1.0"
+                        />
+                      )))
+                  }
+                  {
+                    // axes
                     (() => {
-                      if (!(hex.hex.q % 10 == 0 && hex.hex.r % 10 == 0)) return undefined;
+                      if (!(hex.q % 10 == 0 && hex.r % 10 == 0)) return undefined;
                       return <circle
                         cx="0"
                         cy="0"
                         r={unitsPerFaceDiameter / 2 * 0.1}
                         fill="white"
-                        fillOpacity="0.3"
+                        fillOpacity="0.0" // disabled, was 0.3
                       />
                     })()
                   }
                   {
+                    // ship
                     (() => {
-                      if (!(shipPosition.q == hex.hex.q && shipPosition.r == hex.hex.r)) return undefined;
+                      if (!(shipPosition.q == hex.q && shipPosition.r == hex.r)) return undefined;
                       const width = unitsPerFaceDiameter / 2 * 1;
                       return <rect
                         x={-width / 2}
@@ -806,9 +949,10 @@ export default function App({ }: AppProps) {
                     })()
                   }
                   {
+                    // arrows
                     history.takeZip(historyMemoizations.current)
                       .flatMap(([h, m], i) => {
-                        if (!(hex.hex.q == m.startPosition.q && hex.hex.r == m.startPosition.r)) return [];
+                        if (!(hex.q == m.startPosition.q && hex.r == m.startPosition.r)) return [];
                         const dx = unitsPerVertexSpacing * (m.netTransform.q);
                         const dy = unitsPerFaceDiameter * (m.netTransform.r + m.netTransform.q / 2);
                         const d = Math.sqrt(dx * dx + dy * dy);
@@ -871,6 +1015,7 @@ export default function App({ }: AppProps) {
                           })()
                         ];
                       })
+                      .take(0) // disabled
                   }
                 </Hexagon>
               ))

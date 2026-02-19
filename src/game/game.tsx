@@ -82,7 +82,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
     position: { q: 51, r: -10 },
     faceFill: 0.28,
     faceFillOriginal: 0.27,
-    color: "#C3A3B3",
+    color: "#B3A3AA",
     type: AstralBodyType.Planet,
     weakGravity: false,
     bases: { count: 2, axis: Axis.R },
@@ -92,7 +92,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
     position: { q: 51, r: -1 },
     faceFill: 0.34,
     faceFillOriginal: 0.38,
-    color: "#E5BE83",
+    color: "#E5CEA3",
     type: AstralBodyType.Planet,
     weakGravity: false,
     bases: { count: 6 },
@@ -132,7 +132,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
     position: { q: 20, r: 14 },
     faceFill: 0.19,
     faceFillOriginal: 0.3,
-    color: "#E0E0E0",
+    color: "#D0D0D0",
     type: AstralBodyType.Asteroid,
   },
   "Clandestine": {
@@ -140,7 +140,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
     position: { q: 21, r: -3 },
     faceFill: 0.16,
     faceFillOriginal: 0.3,
-    color: "#999999",
+    color: "#BBBBDD",
     type: AstralBodyType.Asteroid,
   },
   "Jupiter": {
@@ -158,7 +158,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
     position: { q: 11, r: 15 },
     faceFill: 0.28,
     faceFillOriginal: 0.15,
-    color: "#C0C0C0",
+    color: "#907000",
     type: AstralBodyType.Planet,
     weakGravity: false,
     bases: { count: 6 },
@@ -168,7 +168,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
     position: { q: 13, r: 9 },
     faceFill: 0.26,
     faceFillOriginal: 0.16,
-    color: "#FFA500",
+    color: "#CCC200",
     type: AstralBodyType.Planet,
     weakGravity: true,
     bases: { count: 1, side: { q: 1, r: 0 } },
@@ -178,7 +178,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
     position: { q: 9, r: 9 },
     faceFill: 0.29,
     faceFillOriginal: 0.14,
-    color: "#B3B3FF",
+    color: "#A3A3EE",
     type: AstralBodyType.Planet,
     weakGravity: false,
     bases: { count: 1, side: { q: 0, r: -1 } },
@@ -195,3 +195,22 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
   },
 }
 export const astralBodies: AstralBody<AstralBodyName>[] = astralBodyNames.map(n => astralBodiesMap[n]);
+
+export const asteroidFields = [
+  { q: 17, rs: [24, 25] },
+  { q: 18, rs: [23] },
+  { q: 19, rs: [3, 21, 23, 24] },
+  { q: 20, denseRs: [-3, -2], rs: [-6, 1, 13, 16, 18] },
+  { q: 21, denseRs: [-4, -2], rs: [-10, -9, -8, -5, 3, 18, 19, 21] },
+  { q: 22, denseRs: [-4, -3], rs: [-6, -1, 0, 2, 4, 7, 21] },
+  { q: 23, denseRs: [-4], rs: [-9, -1, 9, 11, 20, 21, 22] },
+  { q: 24, rs: [-12, -11, -8, 2, 4, 5, 6, 9, 20] },
+  { q: 25, rs: [-10, -9, -7, -5, -3, -1, 2, 5, 6, 10] },
+  { q: 26, rs: [-10, -7, -4, -1, 2, 5, 7] },
+  { q: 27, rs: [-2, -1, 1, 4, 8] },
+  { q: 28, rs: [4, 6] },
+].flatMap(q =>
+  q.rs.map(r => ({ r, dense: false }))
+    .concat(q.denseRs?.map(r => ({ r, dense: true })) ?? [])
+    .map(f => ({ position: { q: q.q, r: f.r }, dense: f.dense }))
+);
