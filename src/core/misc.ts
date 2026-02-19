@@ -1,4 +1,4 @@
-import { nullopt, opt, Optional, optValueOr } from "./optional";
+import { nullopt, nullopt_, opt, optValueOr } from "./optional";
 
 export function satisfiesCheck<AssertType>(_checkValue: AssertType): <ReturnType>(returnValue: ReturnType) => ReturnType {
   return (returnValue) => returnValue;
@@ -6,6 +6,10 @@ export function satisfiesCheck<AssertType>(_checkValue: AssertType): <ReturnType
 
 export function assertType<AssertType>(x: AssertType): AssertType {
   return x;
+}
+
+export function asType<T>(): <U extends T>(x: U) => T {
+  return x => x;
 }
 
 /**
@@ -139,8 +143,23 @@ export function weightedRandom(weights: number[]): number {
         if (v <= 0) return opt(i);
         else return nullopt;
       },
-      nullopt as Optional<number>
+      nullopt_<number>()
     ),
     weights.length - 1
   )
 }
+
+export function lerp(a: number, b: number, t: number) {
+  return (b - a) * t + a;
+}
+
+export function map2<T, U>(arr: [T, T], mapper: (value: T, index: 0 | 1) => U): [U, U] {
+  return [mapper(arr[0], 0), mapper(arr[1], 1)];
+}
+
+export function map3<T, U>(arr: [T, T, T], mapper: (value: T, index: 0 | 1 | 2) => U): [U, U, U] {
+  return [mapper(arr[0], 0), mapper(arr[1], 1), mapper(arr[2], 2)];
+}
+
+export function tuple2<T, U>(t: [T, U]): [T, U] { return t; }
+export function tuple3<T, U, V>(t: [T, U, V]): [T, U, V] { return t; }

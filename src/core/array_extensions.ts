@@ -1,10 +1,12 @@
-import { Optional, nullopt, opt } from "./optional"
+import { Optional, nullopt, opt, optValueOr } from "./optional"
 
 export type ArrayEveryTransformResult<U> =
   | { testResult: true, transformed: U }
   | { testResult: false }
 declare global {
   interface Array<T> {
+
+    emptyOrSingleOrThrow(message?: string): Optional<T>
 
     /**
      * Similar to `every()`, but the predicate returns an optional transformed version of each element. 
@@ -15,6 +17,7 @@ declare global {
 
     filterTransform<U>(predicate: (element: T, index: number) => Optional<U>): U[]
 
+    get(index: number): Optional<T>;
     groupBy<TKey>(keySelector: (element: T, index: number) => TKey): { key: TKey, group: T[] }[]
 
     /**
@@ -33,6 +36,8 @@ declare global {
 
     permute(): T[][]
 
+    pop_(index?: Optional<number>): Optional<T>;
+
     /**
      * Splits the array into two arrays `[trues, falses]` using the predicate.
      * The first array contains elements that predicate returned `true` for,
@@ -47,6 +52,9 @@ declare global {
 
     skip(count: number): T[]
     take(count: number): T[]
+    take1(): [Optional<T>]
+    take2(): [Optional<T>, Optional<T>]
+    take3(): [Optional<T>, Optional<T>, Optional<T>]
 
     /**
      * Like zip, but extra elements are dropped if one of the arrays is bigger than the other.
@@ -54,6 +62,12 @@ declare global {
     takeZip<U>(other: U[]): [T, U][]
     zip<U>(other: U[]): [T, U][] | undefined
   }
+}
+
+Array.prototype.emptyOrSingleOrThrow = function <T>(this: T[], message: string = "too many elements") {
+  const [v0, v1] = this.take2();
+  if (v1.hasValue) throw message;
+  return v0;
 }
 
 Array.prototype.everyTransform = function <T, U>(this: T[], predicate: (element: T, index: number) => Optional<U>) {
@@ -75,6 +89,15 @@ Array.prototype.filterTransform = function <T, U>(this: T[], predicate: (element
   });
   return transformeds;
 }
+
+Array.prototype.get = function <T>(this: T[], index: number): Optional<T> {
+  if (index < 0 || index >= this.length) {
+    return nullopt;
+  }
+
+  // scary nonnull assertion! but removing the `| undefined` caused by index out of bounds is the whole point of this function.
+  return opt(this[index]!);
+};
 
 Array.prototype.groupBy = function <T, TKey>(this: T[], keySelector: (element: T, index: number) => TKey) {
   const groups: { key: TKey, group: T[] }[] = [];
@@ -149,6 +172,15 @@ Array.prototype.permute = function <T>(this: T[]) {
   return results;
 }
 
+Array.prototype.pop_ = function <T>(this: T[], index: Optional<number> = nullopt): Optional<T> {
+  const index_ = optValueOr(index, this.length - 1);
+  if (index_ < 0 || index_ >= this.length) {
+    return nullopt;
+  }
+  // scary nonnull assertion! but removing the `| undefined` caused by index out of bounds is the whole point of this function.
+  return opt(this.splice(index_, 1)[0]!);
+}
+
 Array.prototype.shallowCopy = function <T>(this: T[]) {
   return [...this];
 }
@@ -175,6 +207,15 @@ Array.prototype.skip = function <T>(this: T[], count: number) {
 }
 Array.prototype.take = function <T>(this: T[], count: number) {
   return this.slice(0, count);
+}
+Array.prototype.take1 = function <T>(this: T[]): [Optional<T>] {
+  return [this.get(0)];
+}
+Array.prototype.take2 = function <T>(this: T[]): [Optional<T>, Optional<T>] {
+  return [this.get(0), this.get(1)];
+}
+Array.prototype.take3 = function <T>(this: T[]): [Optional<T>, Optional<T>, Optional<T>] {
+  return [this.get(0), this.get(1), this.get(2)];
 }
 
 Array.prototype.takeZip = function <T, U>(this: T[], other: U[]) {

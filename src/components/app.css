@@ -27,7 +27,7 @@ svg g:hover text {
 svg g.hexagon polygon {
   stroke: white;
   stroke-width: 0.02;
-  stroke-opacity: 0.0; /* disabled, was 0.5 */
+  stroke-opacity: 0.5;
   transition: fill-opacity .2s;
 }
 svg polygon.arrowhead {

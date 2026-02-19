@@ -5,23 +5,21 @@ import * as React from "react";
 
 import { HexGrid, Layout, Hexagon, Hex } from 'react-hexgrid';
 
-import { asteroidFields, astralBodies, AstralBodyType, Axis, Corner, cornerE, cornerNE, cornerNW, cornerSE, cornerSW, cornerW, Position, Side, sideN, sideNE, sideNW, sides, sideS, sideSE, sideSW } from "../game/game";
-import { nullopt, nullopt_t, opt, opt_, opt_t, optFromUndefable, Optional } from "../core/optional";
-import { assertType, fullyUnpackGenerator, getRandomInt, minmax, satisfiesCheck, weightedRandom } from '../core/misc';
+import { asteroidFields, astralBodies, AstralBodyType } from "../game/game";
+import { nullopt, opt, Optional, throwOnNullopt } from "../core/optional";
+import { assertType, getRandomInt, lerp, map2, satisfiesCheck, tuple2, weightedRandom } from '../core/misc';
+import { addPos, fromHex, fullPos, getHexInteractions, magnitude, onlyIntersectionInteractionsFilterTransform, posEqual, Position, scalePos, sides, subPos, subPos_, zeroPos } from '../game/hex';
 
 
 
 const mapSize = { width: 66, height: 35 };
-
-function getRRangeOfQ(q: number): { minInclusive: number, maxExclusive: number } {
+export function getRRangeOfQ(q: number): { minInclusive: number, maxExclusive: number } {
   const offset = Math.floor(q / 2); // or q>>1
   return {
     minInclusive: -offset,
     maxExclusive: mapSize.height - offset - (q % 2)
   };
 }
-
-// export temporarily because unused
 export function getQRangeOfR(r: number): { minInclusive: number, maxExclusive: number } {
   return {
     minInclusive: Math.max(-r * 2, 0),
@@ -29,393 +27,7 @@ export function getQRangeOfR(r: number): { minInclusive: number, maxExclusive: n
   };
 }
 
-function addPositions(a: Position, b: Position) { return { q: a.q + b.q, r: a.r + b.r }; }
-
-export function positionToSide(p: Position): Optional<Side> {
-  return optFromUndefable(sides.filter(s => s.q == p.q && s.r == p.r)[0]);
-}
-
-export function throwOnNullopt<T>(o: Optional<T>, err: string): T {
-  if (o.hasValue === false) throw err;
-  return o.value;
-}
-
 const sqrt3 = Math.sqrt(3);
-const hexSides = [
-  { side: sideN, point: { x: -1, y: sqrt3 }, vector: { x: 2, y: 0 } },
-  { side: sideS, point: { x: -1, y: -sqrt3 }, vector: { x: 2, y: 0 } },
-  { side: sideNE, point: { x: 2, y: 0 }, vector: { x: -1, y: sqrt3 } },
-  { side: sideSE, point: { x: 2, y: 0 }, vector: { x: -1, y: -sqrt3 } },
-  { side: sideNW, point: { x: -2, y: 0 }, vector: { x: 1, y: sqrt3 } },
-  { side: sideSW, point: { x: -2, y: 0 }, vector: { x: 1, y: -sqrt3 } },
-];
-const epsilon = 1e-6;
-
-enum PathIntersectionsType { AxisAligned, EdgeAligned, Oblique };
-function getHexIntersections(path: { start: Position, end: Position })
-  : (
-    | {
-      type: PathIntersectionsType.Oblique,
-      intersections: { time: number, intersected: Position, passed: Optional<Position> }[]
-    }
-    | {
-      type: PathIntersectionsType.AxisAligned,
-      parallelTo: Axis,
-      direction: Side,
-      length: number,
-      iterate: () => Generator<{ time: number, position: Position }, void, void>
-    }
-    | {
-      type: PathIntersectionsType.EdgeAligned,
-      perpendicularTo: Axis,
-      direction: Corner,
-      passedDirections: [Side, Side],
-      length: number,
-      iterate: () => Generator<
-        {
-          intersected: { time: number, position: Position },
-          passed: opt_t<{ time: number, positions: [Position, Position] }>,
-        },
-        {
-          intersected: { time: number, position: Position },
-          passed: nullopt_t,
-        },
-        void
-      >,
-    }
-  ) {
-
-  const fullPath = {
-    start: { q: path.start.q, r: path.start.r, s: -(path.start.q + path.start.r) },
-    end: { q: path.end.q, r: path.end.r, s: -(path.end.q + path.end.r) },
-  };
-  const transform = {
-    q: fullPath.end.q - fullPath.start.q,
-    r: fullPath.end.r - fullPath.start.r,
-    s: fullPath.end.s - fullPath.start.s,
-  };
-
-  const alignedAxis = ((): Optional<{ parallelTo: Axis, direction: Side, length: number }> => {
-    if (transform.q == 0) return opt({ parallelTo: Axis.Q, direction: transform.r > 0 ? sideS : sideN, length: Math.abs(transform.r) });
-    else if (transform.r == 0) return opt({ parallelTo: Axis.R, direction: transform.q > 0 ? sideSE : sideNW, length: Math.abs(transform.q) });
-    else if (transform.s == 0) return opt({ parallelTo: Axis.S, direction: transform.q > 0 ? sideNE : sideSW, length: Math.abs(transform.q) });
-    else return nullopt;
-  })();
-  if (alignedAxis.hasValue) {
-    const iterate = function* (): Generator<{ time: number, position: Position }, void, void> {
-      for (let i = 0; i <= alignedAxis.value.length; i++) {
-        yield {
-          time: Math.max(0, (i - 1 / 2) / alignedAxis.value.length),
-          position: {
-            q: path.start.q + alignedAxis.value.direction.q * i,
-            r: path.start.r + alignedAxis.value.direction.r * i,
-          },
-        };
-      }
-    };
-    return {
-      type: PathIntersectionsType.AxisAligned,
-      ...alignedAxis.value,
-      iterate,
-    };
-  }
-
-  const perpendicularAxis = ((): Optional<{ perpendicularTo: Axis, direction: Corner, passedDirections: [Side, Side], length: number }> => {
-    if (transform.q == transform.r) return opt(
-      transform.q > 0
-        ? { perpendicularTo: Axis.S, direction: cornerSE, passedDirections: [sideSE, sideS], length: transform.q }
-        : { perpendicularTo: Axis.S, direction: cornerNW, passedDirections: [sideNW, sideN], length: -transform.q }
-    );
-    else if (transform.q * 2 == -transform.r) return opt(
-      transform.q > 0
-        ? { perpendicularTo: Axis.R, direction: cornerNE, passedDirections: [sideN, sideNE], length: transform.q }
-        : { perpendicularTo: Axis.R, direction: cornerSW, passedDirections: [sideS, sideSW], length: -transform.q }
-    );
-    else if (transform.q == -transform.r * 2) return opt(
-      transform.q > 0
-        ? { perpendicularTo: Axis.Q, direction: cornerE, passedDirections: [sideNE, sideSE], length: -transform.r }
-        : { perpendicularTo: Axis.Q, direction: cornerW, passedDirections: [sideSW, sideNW], length: transform.r }
-    );
-    else return nullopt;
-  })();
-  if (perpendicularAxis.hasValue) {
-    const iterate = function* ()
-      : Generator<
-        {
-          intersected: { time: number, position: Position },
-          passed: opt_t<{ time: number, positions: [Position, Position] }>,
-        },
-        {
-          intersected: { time: number, position: Position },
-          passed: nullopt_t,
-        },
-        void
-      > {
-      let i = 0;
-      while (true) {
-        const intersected = {
-          time: Math.max(0, (i - 1 / 3) / perpendicularAxis.value.length),
-          position: {
-            q: path.start.q + perpendicularAxis.value.direction.q * i,
-            r: path.start.r + perpendicularAxis.value.direction.r * i,
-          },
-        };
-
-        if (i >= perpendicularAxis.value.length) return { intersected, passed: nullopt };
-
-        yield {
-          intersected,
-          passed: opt_({
-            time: (i + 1 / 3) / perpendicularAxis.value.length,
-            positions: [
-              {
-                q: intersected.position.q + perpendicularAxis.value.passedDirections[0].q,
-                r: intersected.position.r + perpendicularAxis.value.passedDirections[0].r,
-              },
-              {
-                q: intersected.position.q + perpendicularAxis.value.passedDirections[1].q,
-                r: intersected.position.r + perpendicularAxis.value.passedDirections[1].r,
-              }
-            ],
-          }),
-        };
-
-        i++;
-      }
-    };
-
-    return {
-      type: PathIntersectionsType.EdgeAligned,
-      ...perpendicularAxis.value,
-      iterate,
-    }
-  }
-
-  // The remainder can be handled with a slimmed down line segment intersection checker, since we've already eliminated
-  // vertical lines (q axis), parallel lines (axis perpendicular), and colinear triplets (path endpoints are in the center of a hexagon).
-
-  const interactions: {
-    time: number,
-    position: Position,
-    intersected: boolean,
-  }[] = [];
-
-  const qRange = minmax(0, transform.q);
-  const rRange = minmax(0, transform.r);
-
-  const transformCartesian = { x: 3 * transform.q, y: sqrt3 * (2 * transform.r + transform.q) };
-
-  for (let q = qRange.min; q <= qRange.max; q++) {
-    for (let r = rRange.min; r <= rRange.max; r++) {
-      const center = { x: 3 * q, y: sqrt3 * (2 * r + q) };
-      let sideEndpointsIntersected = 0;
-      let sideFacesIntersected = 0;
-      let earliestTime = 1;
-      hexSides.forEach(side => {
-        const a = (center.x + side.point.x) * transformCartesian.y - (center.y + side.point.y) * transformCartesian.x;
-        const d = transformCartesian.x * side.vector.y - transformCartesian.y * side.vector.x;
-        const s = a / d;
-        // analytical solution is so hard
-        if (s <= -epsilon || s >= 1 + epsilon) return;
-        if (s <= epsilon || s >= 1 - epsilon) sideEndpointsIntersected++;
-        else sideFacesIntersected++;
-        earliestTime = Math.min(earliestTime, Math.max(0, ((center.x + side.point.x) * side.vector.y - (center.y + side.point.y) * side.vector.x) / d));
-        //console.log(JSON.stringify({ transform, q, r, side: side.side, s }));
-      });
-
-      if (sideEndpointsIntersected == 0 && sideFacesIntersected == 0) { continue; } // miss
-
-      const interactionIsIntersection = (() => {
-        if (sideEndpointsIntersected == 2 && sideFacesIntersected == 0) return false; // tangent
-        else if (sideEndpointsIntersected > 2 || sideFacesIntersected > 0) return true;
-        else throw `${JSON.stringify({ transform, q, r })}`;
-      })();
-
-      const existingTime = interactions.filterTransform(i => Math.abs(i.time - earliestTime) <= epsilon ? opt(i.time) : nullopt)[0];
-      if (existingTime !== undefined) earliestTime = existingTime;
-
-      interactions.push({
-        time: earliestTime,
-        position: { q: path.start.q + q, r: path.start.r + r },
-        intersected: interactionIsIntersection,
-      });
-    }
-  }
-
-  const groupedInteractions =
-    interactions
-      .groupBy(i => i.time)
-      .everyTransform((g): Optional<{ time: number, intersected: Position, passed: Optional<Position> }> => {
-        const [firstInteraction, secondInteraction, thirdInteraction] = g.group;
-        if (firstInteraction === undefined || thirdInteraction !== undefined) return nullopt;
-        if (secondInteraction === undefined) {
-          if (!firstInteraction.intersected) return nullopt;
-          return opt({ time: firstInteraction.time, intersected: firstInteraction.position, passed: nullopt });
-        }
-        // unnecessary sanity check that groupBy is working
-        if (firstInteraction.time != secondInteraction.time) return nullopt;
-        if (firstInteraction.intersected) {
-          if (secondInteraction.intersected) return nullopt;
-          return opt({ time: firstInteraction.time, intersected: firstInteraction.position, passed: opt(secondInteraction.position) });
-        }
-        if (!secondInteraction.intersected) return nullopt;
-        return opt({ time: firstInteraction.time, intersected: secondInteraction.position, passed: opt(firstInteraction.position) });
-      });
-
-  if (groupedInteractions.hasValue === false) throw `bad interactions ${JSON.stringify(interactions)}`;
-
-  groupedInteractions.value.sort((a, b) => a.time - b.time);
-
-  /*
-  const gridTransform = {
-    x: transform.q * 3,
-    y: transform.q + transform.r * 2,
-  };
-  //const transformAbs = { q: Math.abs(transform.q), r: Math.abs(transform.r) };
-  const transformSign = { q: Math.sign(transform.q), r: Math.sign(transform.r) };
- 
-  yield {
-    intersected: {
-      time: 0,
-      position: { q: path.start.q, r: path.start.r },
-    },
-  };
- 
-  for (let centerQ = 0; (transform.q > 0) ? (centerQ < transform.q) : (centerQ > transform.q); centerQ += transformSign.q) {
-    const checkpointsGridX: [number, number, number, number] = [
-      centerQ * 3,
-      centerQ * 3 + transformSign.q,
-      centerQ * 3 + transformSign.q * 2,
-      (centerQ + transformSign.q) * 3,
-    ];
-    const checkpointsGridY: [number, number, number, number] = [
-      checkpointsGridX[0] * gridTransform.y / gridTransform.x,
-      checkpointsGridX[1] * gridTransform.y / gridTransform.x,
-      checkpointsGridX[2] * gridTransform.y / gridTransform.x,
-      checkpointsGridX[3] * gridTransform.y / gridTransform.x,
-    ];
-    console.log(JSON.stringify(checkpointsGridY));
-    const startR = (checkpointsGridY[0] - centerQ) / 2;
-    const endR = (checkpointsGridY[3] - centerQ - transformSign.q) / 2;
-    console.log(JSON.stringify({ startR, endR }));
- 
-    let testHex = { q: centerQ, r: Math.round(startR), gridY: centerQ + Math.round(startR) * 2 };
-    while (true) {
-      if (
-        testHex.q != centerQ
-        && testHex.r - transformSign.r / 2 > endR
-      ) {
-        break;
-      }
- 
-      const intersectionType = ((): IntersectionType => {
-        if (testHex.gridY + transformSign.r <= checkpointsGridY[1]) {
-          if (testHex.q == centerQ) return IntersectionType.EnteringBorder;
-        }
- 
-        if (testHex.gridY - transformSign.r >= checkpointsGridY[2]) {
-          if (testHex.q != centerQ) return IntersectionType.ExitedBorder;
-        }
- 
-        if (testHex.q % 2 == 1) {
-          if (testHex.gridY == checkpointsGridY[1] && testHex.gridY - transformSign.r >= checkpointsGridY[0]) return IntersectionType.TangentCheckpoint1;
-          if (testHex.gridY - transformSign.r == checkpointsGridY[1] && testHex.gridY >= checkpointsGridY[2]) return IntersectionType.TangentCheckpoint1;
-          if (testHex.gridY + transformSign.r == checkpointsGridY[2] && testHex.gridY <= checkpointsGridY[1]) return IntersectionType.TangentCheckpoint2;
-        } else {
-          if (testHex.gridY == checkpointsGridY[2] && testHex.gridY + transformSign.r <= checkpointsGridY[3]) return IntersectionType.TangentCheckpoint2;
-        }
- 
- 
- 
- 
-        if (testHex.gridY + transformSign.r > checkpointsGridY[1] && testHex.gridY - transformSign.r < checkpointsGridY[2]) return IntersectionType.InBorder;
- 
-        return IntersectionType.Miss;
-      })();
-      const doYield = (
-        intersectionType == IntersectionType.EnteringBorder
-        || intersectionType == IntersectionType.InBorder
-        || intersectionType == IntersectionType.ExitedBorder
-      );
- 
-      console.log(JSON.stringify({ testHex, intersectionType }));
- 
-      if (doYield) {
-        yield { intersected: { time: 0, position: { q: path.start.q + testHex.q, r: path.start.r + testHex.r } } };
-      }
- 
-      if (testHex.q == centerQ) testHex = { q: testHex.q + transformSign.q, r: testHex.r, gridY: testHex.gridY + transformSign.r };
-      else testHex = { q: testHex.q - transformSign.q, r: testHex.r + transformSign.r, gridY: testHex.gridY + transformSign.r };
-    }
-  }
-  */
-
-  return {
-    type: PathIntersectionsType.Oblique,
-    intersections: groupedInteractions.value,
-  };
-}
-
-enum PathInteractionType { Intersection, EdgeTrace }
-type PathInteraction =
-  & { time: number }
-  & (
-    | {
-      type: PathInteractionType.Intersection,
-      intersectedPosition: Position,
-      tangentPosition: Optional<Position>,
-    }
-    | {
-      type: PathInteractionType.EdgeTrace,
-      tracedPositions: [Position, Position],
-    }
-  )
-function getHexInteractions(path: { start: Position, end: Position }) {
-  const intersectionsData = getHexIntersections(path);
-  if (intersectionsData.type === PathIntersectionsType.AxisAligned) {
-    return {
-      ...intersectionsData,
-      interactions:
-        [...intersectionsData.iterate()]
-          .map((i): PathInteraction => ({ time: i.time, type: PathInteractionType.Intersection, intersectedPosition: i.position, tangentPosition: nullopt }))
-    };
-  } else if (intersectionsData.type === PathIntersectionsType.EdgeAligned) {
-    return {
-      ...intersectionsData,
-      interactions:
-        fullyUnpackGenerator(intersectionsData.iterate())
-          .flatMap((i): PathInteraction[] => [
-            { time: i.intersected.time, type: PathInteractionType.Intersection, intersectedPosition: i.intersected.position, tangentPosition: nullopt },
-            ...(
-              i.passed.hasValue
-                ? [{
-                  time: i.passed.value.time,
-                  type: PathInteractionType.EdgeTrace as PathInteractionType.EdgeTrace,
-                  tracedPositions: i.passed.value.positions,
-                }]
-                : []
-            ),
-          ])
-    };
-  } else {
-    satisfiesCheck<PathIntersectionsType.Oblique>(intersectionsData.type);
-    return {
-      ...intersectionsData,
-      interactions:
-        intersectionsData.intersections.map((i): PathInteraction => ({
-          time: i.time,
-          type: PathInteractionType.Intersection,
-          intersectedPosition: i.intersected,
-          tangentPosition: i.passed,
-        }))
-    };
-  }
-}
-
-function onlyIntersectionInteractionsFilterTransform(i: PathInteraction): Optional<PathInteraction & { type: PathInteractionType.Intersection }> {
-  if (i.type === PathInteractionType.EdgeTrace) return nullopt;
-  return opt_(i);
-}
 
 type ArrowProps = React.SVGProps<SVGLineElement> & {
   id?: string;
@@ -477,15 +89,6 @@ const Arrow: React.FC<ArrowProps> = ({
   );
 };
 
-function throwOnUndef<T>(x: T | undefined, s: string): T {
-  if (x === undefined) throw s;
-  return x;
-}
-
-function lerp(a: number, b: number, t: number) {
-  return (b - a) * t + a;
-}
-
 function physicsStep(
   thrust: Position,
   ignoredFirstWeakGravityBodyIndices: number[],
@@ -503,14 +106,13 @@ function physicsStep(
         const gravityBodies = astralBodies.filterTransform((body, iBody): Optional<{ iBody: number, gravity: Position, gravityType: "strong" | "applied weak" | "ignored weak", }> => {
           if (body.type === AstralBodyType.Asteroid) return nullopt;
 
-          const transformPartial = { q: body.position.q - hex.intersectedPosition.q, r: body.position.r - hex.intersectedPosition.r };
-          const transform = { ...transformPartial, s: -(transformPartial.q + transformPartial.r) };
-          const distance = (Math.abs(transform.q) + Math.abs(transform.r) + Math.abs(transform.s)) / 2;
+          const transform = fullPos(subPos(body.position, hex.intersectedPosition));
+          const distance = magnitude(transform);
           if (body.type === AstralBodyType.Planet) {
             if (distance != 1) return nullopt;
             return opt({
               iBody,
-              gravity: transformPartial,
+              gravity: transform,
               gravityType: (() => {
                 if (!body.weakGravity) return "strong";
                 if (handledFirstWeakGravityBodyIndices.includes(iBody)) return "applied weak";
@@ -523,42 +125,42 @@ function physicsStep(
 
           satisfiesCheck<AstralBodyType.Sun>(body.type);
           if (distance == 1) {
-            return opt({ iBody, gravity: { q: transform.q * 2, r: transform.r * 2 }, gravityType: "strong" });
+            return opt({ iBody, gravity: scalePos(transform, 2), gravityType: "strong" });
           } else if (distance == 2) {
-            if (Math.abs(transform.q) == 1 || Math.abs(transform.r) == 1) return opt({ body, iBody, gravity: transformPartial, gravityType: "strong" });
-            else return opt({ iBody, gravity: { q: transform.q / 2, r: transform.r / 2 }, gravityType: "strong" })
+            if (Math.abs(transform.q) == 1 || Math.abs(transform.r) == 1) return opt({ body, iBody, gravity: transform, gravityType: "strong" });
+            else return opt({ iBody, gravity: scalePos(transform, 1 / 2), gravityType: "strong" })
           }
           else return nullopt;
         });
 
-        const netStrong = gravityBodies.filter(b => b.gravityType === "strong").map(g => g.gravity).reduce(addPositions, { q: 0, r: 0 });
-        const netWeak = gravityBodies.filter(b => b.gravityType !== "strong").map(g => g.gravity).reduce(addPositions, { q: 0, r: 0 });
-        const netAppliedWeak = gravityBodies.filter(b => b.gravityType === "applied weak").map(g => g.gravity).reduce(addPositions, { q: 0, r: 0 });
+        const netStrong = gravityBodies.filter(b => b.gravityType === "strong").map(g => g.gravity).reduce(addPos, zeroPos);
+        const netWeak = gravityBodies.filter(b => b.gravityType !== "strong").map(g => g.gravity).reduce(addPos, zeroPos);
+        const netAppliedWeak = gravityBodies.filter(b => b.gravityType === "applied weak").map(g => g.gravity).reduce(addPos, zeroPos);
 
         return {
           position: hex.intersectedPosition,
           netStrong,
           netWeak,
           netAppliedWeak,
-          net: { q: netStrong.q + netAppliedWeak.q, r: netStrong.r + netAppliedWeak.r },
+          net: addPos(netStrong, netAppliedWeak),
           bodies: gravityBodies,
         };
       })
       .filter(h => h.bodies.length > 0);
-  const momentumAppliedFromLast = { q: position.q - lastPosition.q, r: position.r - lastPosition.r };
+  const momentumAppliedFromLast = subPos(position, lastPosition);
   const gravityAppliedFromLast = {
     gravityHexes,
-    net: gravityHexes.map(h => h.net).reduce(addPositions, { q: 0, r: 0 }),
+    net: gravityHexes.map(h => h.net).reduce(addPos, zeroPos),
   };
   const netTransform =
-    addPositions(momentumAppliedFromLast,
-      addPositions(gravityAppliedFromLast.net,
+    addPos(momentumAppliedFromLast,
+      addPos(gravityAppliedFromLast.net,
         thrust));
   return {
     momentumAppliedFromLast,
     gravityAppliedFromLast,
     netTransform,
-    endPosition: addPositions(position, netTransform),
+    endPosition: addPos(position, netTransform),
   };
 }
 
@@ -570,20 +172,20 @@ export function logAllPossibleOrbits(horizon: number, momentum: number = 4) {
     //console.log(`Checking ${JSON.stringify({ startQ })}`);
     for (let startR = startRRange.minInclusive; startR < startRRange.maxExclusive; startR++) {
       const position0 = { q: startQ, r: startR };
-      if (astralBodies.some(b => b.position.q == position0.q && b.position.r == position0.r)) continue;
+      if (astralBodies.some(b => posEqual(b.position, position0))) continue;
       for (let lastQOffset = -momentum; lastQOffset <= momentum; lastQOffset++) {
         for (let lastROffset = -momentum * 1.5; lastROffset <= momentum * 1.5; lastROffset++) {
-          const position1 = { q: startQ + lastQOffset, r: startR + lastROffset };
+          const position1 = addPos(position0, { q: lastQOffset, r: lastROffset });
           const ignoresToCheck: { iStep: number, iBody: number }[][] = [[]];
           while (true) {
-            const ignores = ignoresToCheck.pop();
-            if (ignores === undefined) break;
+            const ignores = ignoresToCheck.pop_();
+            if (!ignores.hasValue) break;
             const orbit: string[] = [];
             let lastPosition = position0;
             let position = position1;
             for (let iStep = 0; iStep < horizon * 2; iStep++) {
-              if (astralBodies.some(b => b.position.q == position.q && b.position.r == position.r)) break;
-              const stepIgnores = ignores.filter(i => i.iStep == iStep).map(i => i.iBody);
+              if (astralBodies.some(b => posEqual(b.position, position))) break;
+              const stepIgnores = ignores.value.filter(i => i.iStep == iStep).map(i => i.iBody);
               const step = physicsStep(
                 { q: 0, r: 0 },
                 stepIgnores,
@@ -597,17 +199,16 @@ export function logAllPossibleOrbits(horizon: number, momentum: number = 4) {
                 const weakBodies = new Set(step.gravityAppliedFromLast.gravityHexes.flatMap(h => h.bodies.filter(b => b.gravityType !== "strong").map(b => b.iBody)));
 
                 [...weakBodies].permute().forEach(permutation => {
-                  ignoresToCheck.push([...ignores, ...permutation.map(iBody => ({ iStep, iBody }))]);
+                  ignoresToCheck.push([...ignores.value, ...permutation.map(iBody => ({ iStep, iBody }))]);
                 });
               }
 
               orbit.push(nextCacheKey);
 
-              const [orbit0, orbit1] = orbit;
-              if (orbit0 !== undefined && orbit1 !== undefined
-                && nextCacheKey == orbit0
+              const [orbit0, orbit1] = orbit.take2();
+              if (orbit0.hasValue && orbit1.hasValue && nextCacheKey == orbit0.value
               ) {
-                if (nextCacheKey != orbit1) {
+                if (nextCacheKey != orbit1.value) {
                   console.log(`Orbit: ${JSON.stringify({ position0, position1, length: iStep, ignores })}`)
                   break;
                 }
@@ -638,7 +239,7 @@ export default function App({ }: AppProps) {
       const q = getRandomInt(mapSize.width);
       const rRange = getRRangeOfQ(q);
       const r = getRandomInt(rRange.maxExclusive - rRange.minInclusive) + rRange.minInclusive;
-      if (astralBodies.some(body => body.position.q == q && body.position.r == r)) {
+      if (astralBodies.some(b => posEqual(b.position, { q, r }))) {
         continue;
       }
       return { q, r };
@@ -678,14 +279,14 @@ export default function App({ }: AppProps) {
     newHistory
       .skip(historyMemoizations.current.length)
       .forEach(h => {
-        const lastStoredMemoization = historyMemoizations.current[historyMemoizations.current.length - 1];
+        const lastStoredMemoization = historyMemoizations.current.get(historyMemoizations.current.length - 1);
         const { startPosition: lastPosition, endPosition: position } =
-          lastStoredMemoization === undefined
-            ? {
+          lastStoredMemoization.hasValue
+            ? lastStoredMemoization.value
+            : {
               startPosition: appStartingPosition,
               endPosition: appStartingPosition,
-            }
-            : lastStoredMemoization;
+            };
         historyMemoizations.current.push({
           startPosition: position,
           ...physicsStep(
@@ -699,19 +300,19 @@ export default function App({ }: AppProps) {
       });
   };
 
-  const lastHistory = historyMemoizations.current[historyMemoizations.current.length - 1];
-  const shipPositionPartial =
-    lastHistory === undefined
-      ? appStartingPosition
-      : lastHistory.endPosition;
-  const shipPosition = { ...shipPositionPartial, s: -(shipPositionPartial.q + shipPositionPartial.r) };
+  const lastHistory = historyMemoizations.current.get(historyMemoizations.current.length - 1);
+  const shipPosition = fullPos(
+    lastHistory.hasValue
+      ? lastHistory.value.endPosition
+      : appStartingPosition
+  );
 
   //console.log(`render ${JSON.stringify({ shipPosition, history, memos: historyMemoizations.current.length })}`);
 
   // Distance from one vertex to the opposite vertex in svg user space. (discovered by messing around with react-hexgrid)
   const unitsPerVertexDiameter = 2;
   // Distance from one face to the opposite face.
-  const unitsPerFaceDiameter = unitsPerVertexDiameter * Math.sqrt(3) / 2;
+  const unitsPerFaceDiameter = unitsPerVertexDiameter * sqrt3 / 2;
   // Distance from one vertex to the face that marks the next line in the tessellation 
   // (a hexagon's opposite vertex "stabs" into the next line of hexagons in the tessellation)
   const unitsPerVertexSpacing = unitsPerVertexDiameter * 3 / 4;
@@ -730,7 +331,8 @@ export default function App({ }: AppProps) {
   for (let q = 0; q < mapSize.width; q++) {
     const rRange = getRRangeOfQ(q);
     for (let r = rRange.minInclusive; r < rRange.maxExclusive; r++) {
-      hexagons.push(new Hex(q, r, -q - r));
+      const p = fullPos({ q, r });
+      hexagons.push(new Hex(p.q, p.r, p.s));
     }
   }
 
@@ -740,12 +342,12 @@ export default function App({ }: AppProps) {
         position: b.position,
         astralBody: true,
         dense: (() => {
-          const sideNeighbors = sides.map((s) => asteroidFields.filter(f2 => f2.position.q == b.position.q + s.q && f2.position.r == b.position.r + s.r));
+          const sideNeighbors = sides.map((s) => asteroidFields.filter(f2 => posEqual(f2.position, addPos(b.position, s))).emptyOrSingleOrThrow());
           return (
-            sideNeighbors.some(n => n[0] !== undefined)
+            sideNeighbors.some(n => n.hasValue)
             && (
-              sideNeighbors.filter(n => n[0] !== undefined && n[0].dense).length
-              >= sideNeighbors.filter(n => n[0] !== undefined && !n[0].dense).length
+              sideNeighbors.filter(n => n.hasValue && n.value.dense).length
+              >= sideNeighbors.filter(n => n.hasValue && !n.value.dense).length
             )
           );
         })(),
@@ -755,16 +357,18 @@ export default function App({ }: AppProps) {
         const asteroids = [];
 
         const nAsteroids =
-          f.dense
-            ? getRandomInt(15) + 20
-            : getRandomInt(10) + 10;
+          f.astralBody
+            ? getRandomInt(8) + 5
+            : f.dense
+              ? getRandomInt(15) + 20
+              : getRandomInt(10) + 10;
 
         const radii = []
         for (let i = 0; i < nAsteroids; i++) {
           radii.push(Math.pow(i / (nAsteroids - 1), f.dense ? 1.7 : 2));
         }
 
-        const sideNeighbors = sides.map((s) => allFields.filter(f2 => f2.position.q == f.position.q + s.q && f2.position.r == f.position.r + s.r));
+        const sideNeighbors = sides.map((s) => allFields.filter(f2 => posEqual(f2.position, addPos(f.position, s))).emptyOrSingleOrThrow());
 
         const standardShadeRange: [number[], number[]] = [[73, 24, 20], [187, 137, 104]];
         const denseShadeRange: typeof standardShadeRange = [[55, 60, 89], [204, 206, 225]];
@@ -774,16 +378,13 @@ export default function App({ }: AppProps) {
           const { theta, distance: unclearedDistance, shadeRange } = (() => {
             const [thisShadeRange, oppositeShadeRange] = f.dense ? [denseShadeRange, standardShadeRange] : [standardShadeRange, denseShadeRange];
             const outlier = Math.pow(Math.random(), f.dense ? 2.5 : 5);
-            const shadeRange: typeof standardShadeRange = [
-              thisShadeRange[0].takeZip(oppositeShadeRange[0]).map(([a, b]) => lerp(a, b, outlier)),
-              thisShadeRange[1].takeZip(oppositeShadeRange[1]).map(([a, b]) => lerp(a, b, outlier)),
-            ];
+            const shadeRange = map2(thisShadeRange, (thisShade, i) => thisShade.takeZip(oppositeShadeRange[i]).map(([a, b]) => lerp(a, b, outlier)));
 
             if (
               !f.astralBody
               && (
                 nAsteroids - i + centers <= 4
-                || Math.random() < lerp(0, f.dense ? 0.25 : 0.15, sideNeighbors.reduce((a, b) => a + b.length, 0) / 6)
+                || Math.random() < lerp(0, f.dense ? 0.25 : 0.15, sideNeighbors.filter(n => n.hasValue).length / 6)
               )
             ) {
               centers += 1;
@@ -795,22 +396,22 @@ export default function App({ }: AppProps) {
             }
 
             const sideCornerNeighbors = sides.map((_, i) => {
-              const left = throwOnUndef(sideNeighbors[(i + 5) % 6], "should always exist")[0];
-              const right = throwOnUndef(sideNeighbors[(i + 1) % 6], "should always exist")[0];
-              const result: [typeof left, typeof right] = [left, right];
+              const left = throwOnNullopt(sideNeighbors.get((i + 5) % 6), "sideNeighbors wrong size");
+              const right = throwOnNullopt(sideNeighbors.get((i + 1) % 6), "sideNeightbors wrong size");
+              const result = tuple2([left, right]);
               return result;
             });
             const iSide = weightedRandom(
               sideNeighbors.takeZip(sideCornerNeighbors).map(p =>
                 (f.astralBody ? 0 : 1)
-                + p[0].reduce((a, b) => a + (b.dense ? 9 : 6), 0)
-                + p[1].reduce((a, b) => a + (b === undefined ? 0 : f.astralBody ? 0.25 : b.dense ? 2.5 : 1.5), 0)
+                + (!p[0].hasValue ? 0 : p[0].value.dense ? 9 : 6)
+                + p[1].reduce((a, b) => a + (!b.hasValue ? 0 : f.astralBody ? 0.25 : b.value.dense ? 2.5 : 1.5), 0)
               ));
-            const neighbor = throwOnUndef(sideNeighbors[iSide], "should always exist")[0];
+            const neighbor = throwOnNullopt(sideNeighbors.get(iSide), "sideNeighbors wrong size");
             const maxThetaVariation = Math.PI / 6;
             const thetaVariation = lerp(-maxThetaVariation, maxThetaVariation, Math.random());
-            const cornerNeighbor = throwOnUndef(sideCornerNeighbors[iSide], "should always exist")[thetaVariation > 0 ? 0 : 1];
-            const distance = (neighbor !== undefined && !f.astralBody)
+            const cornerNeighbor = throwOnNullopt(sideCornerNeighbors.get(iSide), "sideNeighbors wrong size")[thetaVariation > 0 ? 0 : 1];
+            const distance = (neighbor.hasValue && !f.astralBody)
               ? Math.pow(Math.random(), 0.2)
               : Math.random();
 
@@ -819,8 +420,8 @@ export default function App({ }: AppProps) {
               distance,
               shadeRange:
                 ((): typeof standardShadeRange => {
-                  const neighborShadeRange = neighbor === undefined ? shadeRange : neighbor.dense ? denseShadeRange : standardShadeRange;
-                  const cornerNeighborShadeRange = cornerNeighbor === undefined ? neighborShadeRange : cornerNeighbor.dense ? denseShadeRange : standardShadeRange;
+                  const neighborShadeRange = !neighbor.hasValue ? shadeRange : neighbor.value.dense ? denseShadeRange : standardShadeRange;
+                  const cornerNeighborShadeRange = !cornerNeighbor.hasValue ? neighborShadeRange : cornerNeighbor.value.dense ? denseShadeRange : standardShadeRange;
                   const neighborsShadeRange: typeof standardShadeRange = [
                     neighborShadeRange[0].takeZip(cornerNeighborShadeRange[0]).map(([a, b]) => lerp(a, b, Math.abs(thetaVariation) / maxThetaVariation)),
                     neighborShadeRange[1].takeZip(cornerNeighborShadeRange[1]).map(([a, b]) => lerp(a, b, Math.abs(thetaVariation) / maxThetaVariation)),
@@ -838,7 +439,7 @@ export default function App({ }: AppProps) {
               : unclearedDistance;
 
           const radius = Math.min(1, Math.max(0,
-            throwOnUndef(radii.splice(getRandomInt(radii.length), 1)[0], "should always exist")
+            throwOnNullopt(radii.pop_(opt(getRandomInt(radii.length))), "impossible out of bounds") // so clear that this is [0, radii.length)
             + lerp(-0.1, 0.1, Math.random())
           ));
 
@@ -871,8 +472,8 @@ export default function App({ }: AppProps) {
                   r={hex.r}
                   s={hex.s}
                   onClick={() => {
-                    const transform = { q: hex.q - shipPosition.q, r: hex.r - shipPosition.r, s: hex.s - shipPosition.s };
-                    const distance = (Math.abs(transform.q) + Math.abs(transform.r) + Math.abs(transform.s)) / 2;
+                    const transform = subPos_(fromHex(hex), shipPosition);
+                    const distance = magnitude(transform);
                     console.log(`click ${JSON.stringify({ hex, shipPosition, distance })}`);
                     if (distance <= 2) {
                       setHistory([
@@ -883,7 +484,7 @@ export default function App({ }: AppProps) {
                         },
                       ]);
                     } else {
-                      setAppStartingPosition({ q: hex.q, r: hex.r });
+                      setAppStartingPosition(fromHex(hex));
                       setHistoryRaw([]);
                       historyMemoizations.current = [];
                     }
@@ -891,7 +492,7 @@ export default function App({ }: AppProps) {
                 >
                   {
                     generatedAsteroidFields
-                      .filter(f => f.position.q == hex.q && f.position.r == hex.r)
+                      .filter(f => posEqual(f.position, fromHex(hex)))
                       .map(f => {
                         const radiusRange: [number, number] = [0.01, 0.11];
                         const spread = 1.3;
@@ -908,7 +509,7 @@ export default function App({ }: AppProps) {
                   }
                   {
                     astralBodies
-                      .filter(body => body.position.q == hex.q && body.position.r == hex.r)
+                      .filter(body => posEqual(body.position, fromHex(hex)))
                       .map(((body, ibody) => (
                         <circle
                           key={`${ihex},${ibody}`}
@@ -936,7 +537,7 @@ export default function App({ }: AppProps) {
                   {
                     // ship
                     (() => {
-                      if (!(shipPosition.q == hex.q && shipPosition.r == hex.r)) return undefined;
+                      if (!posEqual(shipPosition, fromHex(hex))) return undefined;
                       const width = unitsPerFaceDiameter / 2 * 1;
                       return <rect
                         x={-width / 2}
@@ -952,7 +553,7 @@ export default function App({ }: AppProps) {
                     // arrows
                     history.takeZip(historyMemoizations.current)
                       .flatMap(([h, m], i) => {
-                        if (!(hex.q == m.startPosition.q && hex.r == m.startPosition.r)) return [];
+                        if (!posEqual(m.startPosition, fromHex(hex))) return [];
                         const dx = unitsPerVertexSpacing * (m.netTransform.q);
                         const dy = unitsPerFaceDiameter * (m.netTransform.r + m.netTransform.q / 2);
                         const d = Math.sqrt(dx * dx + dy * dy);
@@ -999,7 +600,7 @@ export default function App({ }: AppProps) {
                             ];
 
                             let pos = { x: 0, y: 0 };
-                            return subArrows.filter(a => !(a.transform.q == 0 && a.transform.r == 0)).map(a => {
+                            return subArrows.filter(a => !posEqual(a.transform, zeroPos)).map(a => {
                               const startPos = pos;
                               pos = { x: pos.x + unitsPerVertexSpacing * a.transform.q, y: pos.y + unitsPerFaceDiameter * (a.transform.r + a.transform.q / 2) };
                               return <Arrow
@@ -1015,7 +616,6 @@ export default function App({ }: AppProps) {
                           })()
                         ];
                       })
-                      .take(0) // disabled
                   }
                 </Hexagon>
               ))

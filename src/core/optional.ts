@@ -4,7 +4,7 @@ export type Optional<T> =
   | { hasValue: false }
 export type nullopt_t = { hasValue: false }
 export const nullopt: nullopt_t = { hasValue: false };
-export function nullopt_<T>(): Optional<T> & nullopt_t { return nullopt; }
+export function nullopt_<T>(): Optional<T> { return nullopt; }
 export type opt_t<T> = { hasValue: true, value: T }
 export function opt<T>(value: T): Optional<T> { return { hasValue: true, value } }
 export function opt_<T>(value: T): Optional<T> & opt_t<T> { return { hasValue: true, value } }
@@ -36,4 +36,9 @@ export function optFromUndefable<T>(v: T | undefined): Optional<T> {
 export function optFromNullableUndefable<T>(v: T | null | undefined): Optional<T> {
   if (v === null || v === undefined) return nullopt;
   else return opt(v);
+}
+
+export function throwOnNullopt<T>(o: Optional<T>, err: string): T {
+  if (o.hasValue === false) throw err;
+  return o.value;
 }
