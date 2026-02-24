@@ -8,7 +8,7 @@ import { HexGrid, Layout, Hexagon, Hex } from 'react-hexgrid';
 import { asteroidFields, astralBodies, AstralBodyType } from "../game/game";
 import { nullopt, opt, Optional, throwOnNullopt } from "../core/optional";
 import { assertType, getRandomInt, lerp, map2, satisfiesCheck, tuple2, weightedRandom } from '../core/misc';
-import { addPos, fromHex, fullPos, getHexInteractions, magnitude, onlyIntersectionInteractionsFilterTransform, posEqual, Position, scalePos, sides, subPos, subPos_, zeroPos } from '../game/hex';
+import { addPos, fromHex, fullPos, getHexInteractions, magnitude, onlyIntersectionInteractionsFilterTransform, PathInteractionType, posEqual, Position, scalePos, sides, subPos, subPos_, zeroPos } from '../game/hex';
 
 
 
@@ -227,13 +227,55 @@ export function logAllPossibleOrbits(horizon: number, momentum: number = 4) {
   }
 }
 
+export function logAllHexInteractions(max_distance: number) {
+  const hexes = [];
+  for (let q = -max_distance; q <= max_distance; q++) {
+    const minR = (2 * max_distance - Math.abs(q) + q) / -2
+    const maxR = (2 * max_distance - Math.abs(q) - q) / 2
+    for (let r = minR; r <= maxR; r++) {
+      hexes.push(
+        `  (${q}, ${r}): [\n${//
+        getHexInteractions({ start: { q: 0, r: 0 }, end: { q, r } })
+          .interactions
+          .map((interaction) => {
+            const timeFraction = ((): [number, number] => {
+              for (let denom = 1; denom <= 100; denom++) {
+                for (let num = 0; num <= denom; num++) {
+                  if (Math.abs(num / denom - interaction.time) < 1e-13) return [num, denom]
+                }
+              }
+              console.log(`Couldn't rationalize ${interaction.time}`);
+              return [-1, -1];
+            })()
+            if (interaction.type == PathInteractionType.Intersection) {
+              if (!interaction.tangentPosition.hasValue) {
+                return `    (${timeFraction[0]}, ${timeFraction[1]}, 0, ((${interaction.intersectedPosition.q}, ${interaction.intersectedPosition.r}),)),\n`;
+              } else {
+                return `    (${timeFraction[0]}, ${timeFraction[1]}, 1, ((${interaction.intersectedPosition.q}, ${interaction.intersectedPosition.r}), (${interaction.tangentPosition.value.q}, ${interaction.tangentPosition.value.r}))),\n`;
+              }
+            } else {
+              satisfiesCheck<PathInteractionType.EdgeTrace>(interaction.type);
+              return `    (${timeFraction[0]}, ${timeFraction[1]}, 2, ((${interaction.tracedPositions[0].q}, ${interaction.tracedPositions[0].r}), (${interaction.tracedPositions[1].q}, ${interaction.tracedPositions[1].r}))),\n`;
+            }
+          })
+          .join("")
+        }  ],\n`
+      );
+    }
+  }
+  console.log([
+    `{\n`,
+    ...hexes,
+    `}\n`,
+  ].join(""))
+}
+
 type AppProps = {};
 export default function App({ }: AppProps) {
-  /*
-  React.useEffect(() => {
-    logAllPossibleOrbits(20);
-  }, []);
-  */
+
+  // React.useEffect(() => { logAllPossibleOrbits(20); }, []);
+  // React.useEffect(() => { logAllHexInteractions(20); }, []);
+
   const [appStartingPosition, setAppStartingPosition] = React.useState<Position>(() => {
     while (true) {
       const q = getRandomInt(mapSize.width);
@@ -356,9 +398,12 @@ export default function App({ }: AppProps) {
       .map(f => {
         const asteroids = [];
 
+        const sideNeighbors = sides.map((s) => allFields.filter(f2 => posEqual(f2.position, addPos(f.position, s))).emptyOrSingleOrThrow());
+        const neighborCount = sideNeighbors.filter(n => n.hasValue).length;
+
         const nAsteroids =
           f.astralBody
-            ? getRandomInt(8) + 5
+            ? Math.ceil(getRandomInt(10) * neighborCount / 6) + 3
             : f.dense
               ? getRandomInt(15) + 20
               : getRandomInt(10) + 10;
@@ -368,8 +413,6 @@ export default function App({ }: AppProps) {
           radii.push(Math.pow(i / (nAsteroids - 1), f.dense ? 1.7 : 2));
         }
 
-        const sideNeighbors = sides.map((s) => allFields.filter(f2 => posEqual(f2.position, addPos(f.position, s))).emptyOrSingleOrThrow());
-
         const standardShadeRange: [number[], number[]] = [[73, 24, 20], [187, 137, 104]];
         const denseShadeRange: typeof standardShadeRange = [[55, 60, 89], [204, 206, 225]];
 
@@ -377,14 +420,14 @@ export default function App({ }: AppProps) {
         for (let i = 0; i < nAsteroids; i++) {
           const { theta, distance: unclearedDistance, shadeRange } = (() => {
             const [thisShadeRange, oppositeShadeRange] = f.dense ? [denseShadeRange, standardShadeRange] : [standardShadeRange, denseShadeRange];
-            const outlier = Math.pow(Math.random(), f.dense ? 2.5 : 5);
+            const outlier = Math.pow(Math.random(), f.dense ? 2.5 : 6);
             const shadeRange = map2(thisShadeRange, (thisShade, i) => thisShade.takeZip(oppositeShadeRange[i]).map(([a, b]) => lerp(a, b, outlier)));
 
             if (
               !f.astralBody
               && (
                 nAsteroids - i + centers <= 4
-                || Math.random() < lerp(0, f.dense ? 0.25 : 0.15, sideNeighbors.filter(n => n.hasValue).length / 6)
+                || Math.random() < lerp(0, f.dense ? 0.25 : 0.15, neighborCount / 6)
               )
             ) {
               centers += 1;
