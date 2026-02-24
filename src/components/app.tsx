@@ -144,21 +144,16 @@ function physicsStep(
             if (hex.requiredBodyDirection.hasValue && !posEqual(transform, hex.requiredBodyDirection.value)) return nullopt;
             return opt({ iBody, gravity: scalePos(transform, 2), gravityType: "strong" });
           } else if (distance == 2) {
-            if (Math.abs(transform.q) == 1 || Math.abs(transform.r) == 1) return opt({ body, iBody, gravity: transform, gravityType: "strong" });
-            else {
-              const transformDirection = scalePos(transform, 1 / 2);
-              if (hex.requiredBodyDirection.hasValue && !posEqual(transformDirection, hex.requiredBodyDirection.value)) return nullopt;
-              return opt({
-                iBody,
-                gravity: transformDirection,
-                gravityType: (() => {
-                  if (handledFirstWeakGravityBodyIndices.includes(iBody)) return "applied weak";
-                  handledFirstWeakGravityBodyIndices.push(iBody);
-                  if (ignoredFirstWeakGravityBodyIndices.includes(iBody)) return "ignored weak";
-                  else return "applied weak";
-                })(),
-              })
-            }
+            const gravityType = (() => {
+              if (handledFirstWeakGravityBodyIndices.includes(iBody)) return "applied weak";
+              handledFirstWeakGravityBodyIndices.push(iBody);
+              if (ignoredFirstWeakGravityBodyIndices.includes(iBody)) return "ignored weak";
+              else return "applied weak";
+            })();
+            if (Math.abs(transform.q) == 1 || Math.abs(transform.r) == 1) return opt({ body, iBody, gravity: transform, gravityType });
+            const transformDirection = scalePos(transform, 1 / 2);
+            if (hex.requiredBodyDirection.hasValue && !posEqual(transformDirection, hex.requiredBodyDirection.value)) return nullopt;
+            return opt({ iBody, gravity: transformDirection, gravityType, })
           }
           else return nullopt;
         });
