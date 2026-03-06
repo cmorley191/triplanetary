@@ -540,183 +540,186 @@ export default function App({ }: AppProps) {
 
   return (
     <div style={{ margin: 10 }}>
+      <div>
+        <label>
+          <input
+            type="checkbox"
+            checked={appIgnoreWeak}
+            onChange={(e) => {
+              setAppIgnoreWeak(e.target.checked);
+            }}
+          />
+          Ignore Weak Gravity
+        </label>
+      </div>
 
-      <label>
-        <input
-          type="checkbox"
-          checked={appIgnoreWeak}
-          onChange={(e) => {
-            setAppIgnoreWeak(e.target.checked);
-          }}
-        />
-        Ignore Weak Gravity
-      </label>
-
-      <HexGrid
-        width={viewBoxSize.width * pixelsPerUnit}
-        height={viewBoxSize.height * pixelsPerUnit}
-        viewBox={`${-unitsPerVertexDiameter / 2} ${-unitsPerFaceDiameter / 2} ${viewBoxSize.width} ${viewBoxSize.height}`}
-      >
-        <Layout origin={{ x: 0, y: 0 }} size={{ x: 1, y: 1 }}>
-          {
-            hexagons
-              .map((hex, ihex) => (
-                <Hexagon
-                  key={ihex}
-                  q={hex.q}
-                  r={hex.r}
-                  s={hex.s}
-                  onClick={() => {
-                    const transform = subPos_(fromHex(hex), shipPosition);
-                    const distance = magnitude(transform);
-                    console.log(`click ${JSON.stringify({ hex, shipPosition, distance })}`);
-                    if (distance <= 2) {
-                      setHistory([
-                        ...history,
-                        {
-                          thrust: transform,
-                          ignoredFirstWeakGravityBodyIndices: appIgnoreWeak ? astralBodies.map((_, i) => i) : [],
-                        },
-                      ]);
-                    } else {
-                      setAppStartingPosition(fromHex(hex));
-                      setHistoryRaw([]);
-                      historyMemoizations.current = [];
+      <div>
+        <HexGrid
+          width={viewBoxSize.width * pixelsPerUnit}
+          height={viewBoxSize.height * pixelsPerUnit}
+          viewBox={`${-unitsPerVertexDiameter / 2} ${-unitsPerFaceDiameter / 2} ${viewBoxSize.width} ${viewBoxSize.height}`}
+        >
+          <Layout origin={{ x: 0, y: 0 }} size={{ x: 1, y: 1 }}>
+            {
+              hexagons
+                .map((hex, ihex) => (
+                  <Hexagon
+                    key={ihex}
+                    q={hex.q}
+                    r={hex.r}
+                    s={hex.s}
+                    onClick={() => {
+                      const transform = subPos_(fromHex(hex), shipPosition);
+                      const distance = magnitude(transform);
+                      console.log(`click ${JSON.stringify({ hex, shipPosition, distance })}`);
+                      if (distance <= 2) {
+                        setHistory([
+                          ...history,
+                          {
+                            thrust: transform,
+                            ignoredFirstWeakGravityBodyIndices: appIgnoreWeak ? astralBodies.map((_, i) => i) : [],
+                          },
+                        ]);
+                      } else {
+                        setAppStartingPosition(fromHex(hex));
+                        setHistoryRaw([]);
+                        historyMemoizations.current = [];
+                      }
+                    }}
+                  >
+                    {
+                      generatedAsteroidFields
+                        .filter(f => posEqual(f.position, fromHex(hex)))
+                        .map(f => {
+                          const radiusRange: [number, number] = [0.01, 0.11];
+                          const spread = 1.3;
+                          return f.asteroids.map(a =>
+                            <circle
+                              cx={a.x * unitsPerFaceDiameter / 2 * (1 - radiusRange[1]) * spread}
+                              cy={a.y * unitsPerFaceDiameter / 2 * (1 - radiusRange[1]) * spread}
+                              r={lerp(radiusRange[0], radiusRange[1], a.radius) * unitsPerVertexDiameter / 2}
+                              fill={a.shade}
+                              fillOpacity="1.0"
+                            />
+                          );
+                        })[0]
                     }
-                  }}
-                >
-                  {
-                    generatedAsteroidFields
-                      .filter(f => posEqual(f.position, fromHex(hex)))
-                      .map(f => {
-                        const radiusRange: [number, number] = [0.01, 0.11];
-                        const spread = 1.3;
-                        return f.asteroids.map(a =>
+                    {
+                      astralBodies
+                        .filter(body => posEqual(body.position, fromHex(hex)))
+                        .map(((body, ibody) => (
                           <circle
-                            cx={a.x * unitsPerFaceDiameter / 2 * (1 - radiusRange[1]) * spread}
-                            cy={a.y * unitsPerFaceDiameter / 2 * (1 - radiusRange[1]) * spread}
-                            r={lerp(radiusRange[0], radiusRange[1], a.radius) * unitsPerVertexDiameter / 2}
-                            fill={a.shade}
+                            key={`${ihex},${ibody}`}
+                            cx="0"
+                            cy="0"
+                            r={unitsPerFaceDiameter / 2 * body.faceFill}
+                            fill={body.color}
                             fillOpacity="1.0"
                           />
-                        );
-                      })[0]
-                  }
-                  {
-                    astralBodies
-                      .filter(body => posEqual(body.position, fromHex(hex)))
-                      .map(((body, ibody) => (
-                        <circle
-                          key={`${ihex},${ibody}`}
+                        )))
+                    }
+                    {
+                      // axes
+                      (() => {
+                        if (!(hex.q % 10 == 0 && hex.r % 10 == 0)) return undefined;
+                        return <circle
                           cx="0"
                           cy="0"
-                          r={unitsPerFaceDiameter / 2 * body.faceFill}
-                          fill={body.color}
-                          fillOpacity="1.0"
+                          r={unitsPerFaceDiameter / 2 * 0.1}
+                          fill="white"
+                          fillOpacity="0.0" // disabled, was 0.3
                         />
-                      )))
-                  }
-                  {
-                    // axes
-                    (() => {
-                      if (!(hex.q % 10 == 0 && hex.r % 10 == 0)) return undefined;
-                      return <circle
-                        cx="0"
-                        cy="0"
-                        r={unitsPerFaceDiameter / 2 * 0.1}
-                        fill="white"
-                        fillOpacity="0.0" // disabled, was 0.3
-                      />
-                    })()
-                  }
-                  {
-                    // ship
-                    (() => {
-                      if (!posEqual(shipPosition, fromHex(hex))) return undefined;
-                      const width = unitsPerFaceDiameter / 2 * 1;
-                      return <rect
-                        x={-width / 2}
-                        y={-width / 2}
-                        width={width}
-                        height={width}
-                        fill={"pink"}
-                        fillOpacity="1.0"
-                      />;
-                    })()
-                  }
-                  {
-                    // arrows
-                    history.takeZip(historyMemoizations.current)
-                      .flatMap(([h, m], i) => {
-                        if (!posEqual(m.startPosition, fromHex(hex))) return [];
-                        const dx = unitsPerVertexSpacing * (m.netTransform.q);
-                        const dy = unitsPerFaceDiameter * (m.netTransform.r + m.netTransform.q / 2);
-                        const d = Math.sqrt(dx * dx + dy * dy);
-                        const scale = (d - unitsPerFaceDiameter * 0.3) / d;
-                        return [
-                          <Arrow
-                            key={`${i}transform`}
-                            x2={unitsPerVertexSpacing * (m.netTransform.q) * scale}
-                            y2={unitsPerFaceDiameter * (m.netTransform.r + m.netTransform.q / 2) * scale}
-                            color="white"
-                            strokeWidth={0.2}
-                            opacity={Math.max(0, 1 + (i - history.length + 1) / 10)}
-                          />,
-                          ...(() => {
-                            if (history.length - i > 5) return [];
-                            const subArrows: ({ props: ArrowProps } & { transform: Position, key: string })[] = [
-                              {
-                                key: "momentum",
-                                transform: m.momentumAppliedFromLast,
-                                props: {
-                                  color: "green",
-                                  strokeWidth: 0.1,
-                                  opacity: 0.5,
+                      })()
+                    }
+                    {
+                      // ship
+                      (() => {
+                        if (!posEqual(shipPosition, fromHex(hex))) return undefined;
+                        const width = unitsPerFaceDiameter / 2 * 1;
+                        return <rect
+                          x={-width / 2}
+                          y={-width / 2}
+                          width={width}
+                          height={width}
+                          fill={"pink"}
+                          fillOpacity="1.0"
+                        />;
+                      })()
+                    }
+                    {
+                      // arrows
+                      history.takeZip(historyMemoizations.current)
+                        .flatMap(([h, m], i) => {
+                          if (!posEqual(m.startPosition, fromHex(hex))) return [];
+                          const dx = unitsPerVertexSpacing * (m.netTransform.q);
+                          const dy = unitsPerFaceDiameter * (m.netTransform.r + m.netTransform.q / 2);
+                          const d = Math.sqrt(dx * dx + dy * dy);
+                          const scale = (d - unitsPerFaceDiameter * 0.3) / d;
+                          return [
+                            <Arrow
+                              key={`${i}transform`}
+                              x2={unitsPerVertexSpacing * (m.netTransform.q) * scale}
+                              y2={unitsPerFaceDiameter * (m.netTransform.r + m.netTransform.q / 2) * scale}
+                              color="white"
+                              strokeWidth={0.2}
+                              opacity={Math.max(0, 1 + (i - history.length + 1) / 10)}
+                            />,
+                            ...(() => {
+                              if (history.length - i > 5) return [];
+                              const subArrows: ({ props: ArrowProps } & { transform: Position, key: string })[] = [
+                                {
+                                  key: "momentum",
+                                  transform: m.momentumAppliedFromLast,
+                                  props: {
+                                    color: "green",
+                                    strokeWidth: 0.1,
+                                    opacity: 0.5,
+                                  },
                                 },
-                              },
-                              {
-                                key: "gravity",
-                                transform: m.gravityAppliedFromLast.net,
-                                props: {
-                                  color: "#600c94",
-                                  strokeWidth: 0.1,
-                                  opacity: 0.7,
-                                }
-                              },
-                              {
-                                key: "thrust",
-                                transform: h.thrust,
-                                props: {
-                                  color: "orange",
-                                  strokeWidth: 0.13,
-                                  opacity: 0.8,
+                                {
+                                  key: "gravity",
+                                  transform: m.gravityAppliedFromLast.net,
+                                  props: {
+                                    color: "#600c94",
+                                    strokeWidth: 0.1,
+                                    opacity: 0.7,
+                                  }
                                 },
-                              },
-                            ];
+                                {
+                                  key: "thrust",
+                                  transform: h.thrust,
+                                  props: {
+                                    color: "orange",
+                                    strokeWidth: 0.13,
+                                    opacity: 0.8,
+                                  },
+                                },
+                              ];
 
-                            let pos = { x: 0, y: 0 };
-                            return subArrows.filter(a => !posEqual(a.transform, zeroPos)).map(a => {
-                              const startPos = pos;
-                              pos = { x: pos.x + unitsPerVertexSpacing * a.transform.q, y: pos.y + unitsPerFaceDiameter * (a.transform.r + a.transform.q / 2) };
-                              return <Arrow
-                                key={`${i}${a.key}`}
-                                x1={startPos.x}
-                                y1={startPos.y}
-                                x2={pos.x}
-                                y2={pos.y}
-                                color={a.props.color}
-                                {...a.props}
-                              />;
-                            });
-                          })()
-                        ];
-                      })
-                  }
-                </Hexagon>
-              ))
-          }
-        </Layout>
-      </HexGrid>
+                              let pos = { x: 0, y: 0 };
+                              return subArrows.filter(a => !posEqual(a.transform, zeroPos)).map(a => {
+                                const startPos = pos;
+                                pos = { x: pos.x + unitsPerVertexSpacing * a.transform.q, y: pos.y + unitsPerFaceDiameter * (a.transform.r + a.transform.q / 2) };
+                                return <Arrow
+                                  key={`${i}${a.key}`}
+                                  x1={startPos.x}
+                                  y1={startPos.y}
+                                  x2={pos.x}
+                                  y2={pos.y}
+                                  color={a.props.color}
+                                  {...a.props}
+                                />;
+                              });
+                            })()
+                          ];
+                        })
+                    }
+                  </Hexagon>
+                ))
+            }
+          </Layout>
+        </HexGrid>
+      </div>
     </div >
   );
 }
