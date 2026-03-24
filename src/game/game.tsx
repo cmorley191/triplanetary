@@ -1,5 +1,6 @@
 import { CSSProperties } from "react";
 import { Axis, Position, Side } from "./hex";
+import { Optional } from "../core/optional";
 
 export enum AstralBodyType { Sun, Planet, Asteroid }
 
@@ -182,3 +183,151 @@ export const asteroidFields = [
     .concat(q.denseRs?.map(r => ({ r, dense: true })) ?? [])
     .map(f => ({ position: { q: q.q, r: f.r }, dense: f.dense }))
 );
+
+export enum OverloadStatus { Unsupported, Used, Available };
+export enum GameTurnPhase { Astrogation, Combat, Resupply, Complete };
+
+export type AstrogationRolloutStep = {
+  momentumAppliedFromLast: Position,
+  gravityAppliedFromLast: {
+    gravityHexes: {
+      position: Position,
+      netStrong: Position,
+      netWeak: Position,
+      netAppliedWeak: Position,
+      net: Position,
+      bodies: {
+        iBody: number,
+        gravity: Position,
+        gravityType: "strong" | "applied weak" | "ignored weak",
+      }[],
+    }[],
+    net: Position,
+  },
+  netTransform: Position,
+  endPosition: Position,
+}
+
+export type GameHistoryTurnStartingState = {
+  ships:
+  | { eliminated: true }
+  | {
+    eliminated: false,
+    position: Position,
+    astrogationRollout: AstrogationRolloutStep,
+    fuelMax: number,
+    fuelCurrent: number,
+    overload: OverloadStatus,
+    gunStrength: number,
+    damage: number,
+  }[][], // [player][]
+};
+
+export type GameHistoryTurnAstrogationInProgress = {
+  astrogationsInProgress: {
+    ignoredFirstWeakGravityBodies: (
+      & { iBody: number }
+      & (
+        | { planned: false }
+        | { planned: true, plannedIgnore: boolean }
+      )
+    )[],
+    thrust:
+    | { planned: false }
+    | {
+      planned: true,
+      thrust: Optional<Side>,
+      overloaded: boolean,
+      endFuel: number,
+      endOverload: OverloadStatus,
+    },
+    rollout: AstrogationRolloutStep,
+  }[], // [active player ship]
+};
+// resolving "plan ignore gravity" and "plan thrust" is pretty trivial -- just do it in the app
+
+export type GameHistoryTurnAstrogationComplete = {
+  astrogation: {
+    ignoredFirstWeakGravityBodies: number[],
+    thrust: Optional<Side>,
+    overloaded: boolean,
+    rollout: AstrogationRolloutStep,
+    endFuel: number,
+  }[], // [active player ship]
+};
+// committing Astrogation is pretty trivial -- just do it in the app
+/*
+export enum GameHistoryTurnCombatEventType { Asteroid, GunAttack }
+export type InProgressSequence<T extends any[]> =
+  T extends [infer TName, infer THead]
+  ? Optional<{ [K in TName & string]: THead }>
+  : T extends [infer TName, infer THead, ...infer TTail]
+  ? Optional<
+    & { [K in TName & string]: THead }
+    & { continuation: InProgressSequence<TTail> }
+  >
+  : never;
+export type OmitAll<TObject, TKeys> =
+  TKeys extends []
+  ? TObject
+  : TKeys extends [infer THead, ...infer TTail]
+  ? THead extends string
+  ? TTail extends string[]
+  ? OmitAll<Omit<TObject, THead>, TTail>
+  : never
+  : never
+  : never;
+export type GameHistoryTurnCombatAsteroidEvent = {
+  type: GameHistoryTurnCombatEventType.Asteroid,
+  iShip: number,
+  field: Position,
+  impact: Optional<{
+    damage: number,
+  }>,
+};
+export type GameHistoryTurnCombatGunAttackEvent = {
+  type: GameHistoryTurnCombatEventType.GunAttack,
+  iShipsAssailants: number[],
+  targets: {
+    iPlayer: number,
+    iShip: number,
+  }[],
+  attackStrengths: number[], // strength[target]
+  defense: {
+    iPlayer: number,
+    iPlayersWillingToCoordinateWith: number[],
+  }[],
+  counterattack: {
+    iPlayer: number,
+    strengths: number[], // strength[assailant_target]
+  }[],
+};
+export type GameHistoryTurnCombatInProgress = {
+  events: (
+    | GameHistoryTurnCombatAsteroidEvent
+    | GameHistoryTurnCombatGunAttackEvent
+  )[],
+  inProgressEvent: (
+    & OmitAll<GameHistoryTurnCombatGunAttackEvent, ['defense', 'counterattack', 'attack']>
+    & {
+      defense:
+      | { planned: false }
+      | { planned: true, defensePlan: GameHistoryTurnCombatGunAttackEvent['defense'] },
+
+    }
+  )
+};
+*/
+
+export type GameHistoryTurn =
+  & {
+    iPlayerActive: number,
+    startingState: GameHistoryTurnStartingState,
+  }
+  & (
+    | ({ phase: GameTurnPhase.Astrogation } & GameHistoryTurnAstrogationInProgress)
+    | (
+      & { phase: GameTurnPhase.Combat | GameTurnPhase.Resupply | GameTurnPhase.Complete }
+      & GameHistoryTurnAstrogationComplete
+    )
+  )
