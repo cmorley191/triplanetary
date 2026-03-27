@@ -5,9 +5,9 @@ import * as React from "react";
 
 import { HexGrid, Layout, Hexagon, Hex } from 'react-hexgrid';
 
-import { asteroidFields, astralBodies, AstralBodyType } from "../game/game";
+import { asteroidFields, astralBodies, astralBodiesMap, AstralBodyType, GameHistoryTurn, GameTurnPhase, OverloadStatus } from "../game/game";
 import { nullopt, opt, Optional, optValueOr, throwOnNullopt } from "../core/optional";
-import { assertType, getRandomInt, lerp, map2, satisfiesCheck, tuple2, weightedRandom } from '../core/misc';
+import { assertType, asType, Element2TypeOf, ElementTypeOf, getRandomInt, lerp, map2, satisfiesCheck, takeZipAll, tuple2, weightedRandom } from '../core/misc';
 import { addPos, fromHex, fullPos, getHexInteractions, magnitude, PathInteractionType, posEqual, Position, scalePos, sides, subPos, subPos_, zeroPos } from '../game/hex';
 
 
@@ -89,17 +89,17 @@ const Arrow: React.FC<ArrowProps> = ({
   );
 };
 
-function physicsStep(
+function physicsStep(input: {
   thrust: Position,
   ignoredFirstWeakGravityBodyIndices: number[],
   lastPosition: Position,
   position: Position
-) {
+}) {
   const handledFirstWeakGravityBodyIndices: number[] = [];
   const gravityHexes =
-    getHexInteractions({ start: lastPosition, end: position })
+    getHexInteractions({ start: input.lastPosition, end: input.position })
       .interactions
-      .skip(posEqual(lastPosition, position) ? 0 : 1) // skip starting hex - its gravity was applied last step
+      .skip(posEqual(input.lastPosition, input.position) ? 0 : 1) // skip starting hex - its gravity was applied last step
       .flatMap((interaction) => {
         if (interaction.type == PathInteractionType.Intersection) return [{
           position: interaction.intersectedPosition,
@@ -133,7 +133,7 @@ function physicsStep(
                 if (!body.weakGravity) return "strong";
                 if (handledFirstWeakGravityBodyIndices.includes(iBody)) return "applied weak";
                 handledFirstWeakGravityBodyIndices.push(iBody);
-                if (ignoredFirstWeakGravityBodyIndices.includes(iBody)) return "ignored weak";
+                if (input.ignoredFirstWeakGravityBodyIndices.includes(iBody)) return "ignored weak";
                 else return "applied weak";
               })(),
             });
@@ -147,7 +147,7 @@ function physicsStep(
             const gravityType = (() => {
               if (handledFirstWeakGravityBodyIndices.includes(iBody)) return "applied weak";
               handledFirstWeakGravityBodyIndices.push(iBody);
-              if (ignoredFirstWeakGravityBodyIndices.includes(iBody)) return "ignored weak";
+              if (input.ignoredFirstWeakGravityBodyIndices.includes(iBody)) return "ignored weak";
               else return "applied weak";
             })();
             if (Math.abs(transform.q) == 1 || Math.abs(transform.r) == 1) return opt({ body, iBody, gravity: transform, gravityType });
@@ -172,7 +172,7 @@ function physicsStep(
         };
       })
       .filter(h => h.bodies.length > 0);
-  const momentumAppliedFromLast = subPos(position, lastPosition);
+  const momentumAppliedFromLast = subPos(input.position, input.lastPosition);
   const gravityAppliedFromLast = {
     gravityHexes,
     net: gravityHexes.map(h => h.net).reduce(addPos, zeroPos),
@@ -180,12 +180,12 @@ function physicsStep(
   const netTransform =
     addPos(momentumAppliedFromLast,
       addPos(gravityAppliedFromLast.net,
-        thrust));
+        input.thrust));
   return {
     momentumAppliedFromLast,
     gravityAppliedFromLast,
     netTransform,
-    endPosition: addPos(position, netTransform),
+    endPosition: addPos(input.position, netTransform),
   };
 }
 
@@ -212,12 +212,12 @@ export function logAllPossibleOrbits(horizon: number, momentum: number = 4) {
             for (let iStep = 0; iStep < horizon * 2; iStep++) {
               if (astralBodies.some(b => posEqual(b.position, position))) break;
               const stepIgnores = optValueOr(ignores.value.get(iStep), []);
-              const step = physicsStep(
-                { q: 0, r: 0 },
-                stepIgnores,
+              const step = physicsStep({
+                thrust: zeroPos,
+                ignoredFirstWeakGravityBodyIndices: stepIgnores,
                 lastPosition,
                 position,
-              );
+              });
               const nextCacheKey = stateToCacheKey(step.endPosition, step.netTransform, ignores.value.slice(iStep + 1));
               //if (nextCacheKey.startsWith(`12,10,1,0;`)) console.log(nextCacheKey);
 
@@ -269,7 +269,7 @@ export function logAllHexInteractions(max_distance: number) {
     for (let r = minR; r <= maxR; r++) {
       hexes.push(
         `  (${q}, ${r}): [\n${//
-        getHexInteractions({ start: { q: 0, r: 0 }, end: { q, r } })
+        getHexInteractions({ start: zeroPos, end: { q, r } })
           .interactions
           .map((interaction) => {
             const timeFraction = ((): [number, number] => {
@@ -310,80 +310,87 @@ export default function App({ }: AppProps) {
   // React.useEffect(() => { logAllPossibleOrbits(20); }, []);
   // React.useEffect(() => { logAllHexInteractions(20); }, []);
 
-  const [appStartingPosition, setAppStartingPosition] = React.useState<Position>(() => {
-    while (true) {
-      const q = getRandomInt(mapSize.width);
-      const rRange = getRRangeOfQ(q);
-      const r = getRandomInt(rRange.maxExclusive - rRange.minInclusive) + rRange.minInclusive;
-      if (astralBodies.some(b => posEqual(b.position, { q, r }))) {
-        continue;
-      }
-      return { q, r };
-    }
-  });
+  const playerCount = 2;
 
   const [history, setHistoryRaw] = React.useState<{
-    thrust: Position,
-    ignoredFirstWeakGravityBodyIndices: number[],
-  }[]>([]);
-
-  const historyMemoizations = React.useRef<{
-    startPosition: Position,
-    momentumAppliedFromLast: Position,
-    gravityAppliedFromLast: {
-      gravityHexes: {
-        position: Position,
-        netStrong: Position,
-        netWeak: Position,
-        netAppliedWeak: Position,
-        net: Position,
-        bodies: {
-          iBody: number,
-          gravity: Position,
-          gravityType: "strong" | "applied weak" | "ignored weak",
-        }[]
-      }[],
-      net: Position,
-    },
-    netTransform: Position,
-    endPosition: Position,
-  }[]>([]);
-
-  const setHistory = (newHistory: typeof history) => {
-    setHistoryRaw(newHistory);
-
-    newHistory
-      .skip(historyMemoizations.current.length)
-      .forEach(h => {
-        const lastStoredMemoization = historyMemoizations.current.get(historyMemoizations.current.length - 1);
-        const { startPosition: lastPosition, endPosition: position } =
-          lastStoredMemoization.hasValue
-            ? lastStoredMemoization.value
-            : {
-              startPosition: appStartingPosition,
-              endPosition: appStartingPosition,
+    pastTurns: (GameHistoryTurn & { phase: GameTurnPhase.Complete })[],
+    currentTurn: GameHistoryTurn
+  }>(() => {
+    const ships =
+      Array(playerCount).fill(false)
+        .map((_, iPlayer) => {
+          const relativeOrbit = (() => {
+            const s = getRandomInt(sides.length);
+            return {
+              lastPosition: throwOnNullopt(sides.get(s), "sides random index impossibility"),
+              position: throwOnNullopt(sides.get((s + (getRandomInt(2) * 2 - 1) + sides.length) % sides.length), "sides modulo index impossibility"),
             };
-        historyMemoizations.current.push({
-          startPosition: position,
-          ...physicsStep(
-            h.thrust,
-            h.ignoredFirstWeakGravityBodyIndices,
-            lastPosition,
-            position,
-          ),
+          })();
+          const planetPosition = astralBodiesMap[iPlayer == 0 ? "Venus" : "Ganymede"].position;
+          const orbit = {
+            lastPosition: addPos(planetPosition, relativeOrbit.lastPosition),
+            position: addPos(planetPosition, relativeOrbit.position),
+          };
+          return [{
+            eliminated: false as false,
+            position: orbit.position,
+            ballisticRollout: physicsStep({
+              thrust: zeroPos,
+              ignoredFirstWeakGravityBodyIndices: [],
+              lastPosition: orbit.lastPosition,
+              position: orbit.position,
+            }),
+            fuelMax: 20,
+            fuelCurrent: 20,
+            overload: OverloadStatus.Available,
+          }];
         });
-        //console.log(`push memo ${JSON.stringify(historyMemoizations.current[historyMemoizations.current.length - 1])}`);
-      });
+
+    const iPlayerActive = getRandomInt(ships.length);
+
+    return {
+      pastTurns: [],
+      currentTurn: {
+        iPlayerActive,
+        startingState: { ships },
+        phase: GameTurnPhase.Astrogation,
+        astrogationsInProgress: [{
+          ignoredFirstWeakGravityBodies: [],
+          thrust: { planned: false },
+          rollout:
+            throwOnNullopt(throwOnNullopt(
+              ships.get(iPlayerActive), "ships random index impossibility")
+              .get(0), "no ships")
+              .ballisticRollout,
+        }],
+      },
+    };
+  });
+
+  const setHistoryAstrogationNewAstrogation = (newHistory: typeof history & { currentTurn: { phase: GameTurnPhase.Astrogation } }) => {
+    setHistoryRaw({
+      ...newHistory,
+      currentTurn: {
+        ...newHistory.currentTurn,
+        astrogationsInProgress:
+          throwOnNullopt(newHistory.currentTurn.startingState.ships.get(newHistory.currentTurn.iPlayerActive), "unexpected active player")
+            .takeZip(newHistory.currentTurn.astrogationsInProgress)
+            .map(([start, astrogation]) => {
+              return start.eliminated
+                ? astrogation
+                : ({
+                  ...astrogation,
+                  rollout: physicsStep({
+                    thrust: astrogation.thrust.planned === true && astrogation.thrust.thrust.hasValue ? astrogation.thrust.thrust.value : zeroPos,
+                    ignoredFirstWeakGravityBodyIndices: astrogation.ignoredFirstWeakGravityBodies.filterTransform(i => i.planned && i.plannedIgnore ? opt(i.iBody) : nullopt),
+                    lastPosition: subPos(start.position, start.ballisticRollout.momentumAppliedFromLast),
+                    position: start.position,
+                  }),
+                });
+            })
+      }
+    })
   };
-
-  const lastHistory = historyMemoizations.current.get(historyMemoizations.current.length - 1);
-  const shipPosition = fullPos(
-    lastHistory.hasValue
-      ? lastHistory.value.endPosition
-      : appStartingPosition
-  );
-
-  //console.log(`render ${JSON.stringify({ shipPosition, history, memos: historyMemoizations.current.length })}`);
 
   // Distance from one vertex to the opposite vertex in svg user space. (discovered by messing around with react-hexgrid)
   const unitsPerVertexDiameter = 2;
@@ -536,21 +543,149 @@ export default function App({ }: AppProps) {
       });
   }, []);
 
-  const [appIgnoreWeak, setAppIgnoreWeak] = React.useState<boolean>(false);
-
   return (
     <div style={{ margin: 10 }}>
       <div>
         <label>
           <input
             type="checkbox"
-            checked={appIgnoreWeak}
+            checked={
+              (() => {
+                if (history.currentTurn.phase === GameTurnPhase.Astrogation) {
+                  const ignore = throwOnNullopt(history.currentTurn.astrogationsInProgress.get(0), "one ship scenario")
+                    .ignoredFirstWeakGravityBodies.emptyOrSingleOrThrow("no double weak body on map");
+                  return ignore.hasValue && ignore.value.planned && ignore.value.plannedIgnore;
+                }
+                return false;
+              })()
+            }
+            disabled={
+              !(
+                history.currentTurn.phase === GameTurnPhase.Astrogation
+                && throwOnNullopt(history.currentTurn.astrogationsInProgress.get(0), "one ship scenario")
+                  .ignoredFirstWeakGravityBodies.length > 0
+              )
+            }
             onChange={(e) => {
-              setAppIgnoreWeak(e.target.checked);
+              if (history.currentTurn.phase !== GameTurnPhase.Astrogation) return;
+              const ignore = throwOnNullopt(history.currentTurn.astrogationsInProgress.get(0), "one ship scenario")
+                .ignoredFirstWeakGravityBodies.emptyOrSingleOrThrow("no double weak body on map");
+              if (ignore.hasValue === false) return;
+              setHistoryAstrogationNewAstrogation({
+                ...history,
+                currentTurn: {
+                  ...history.currentTurn,
+                  astrogationsInProgress: [{
+                    ...throwOnNullopt(history.currentTurn.astrogationsInProgress.get(0), "one ship scenario"),
+                    ignoredFirstWeakGravityBodies: [{
+                      ...ignore.value,
+                      planned: true,
+                      plannedIgnore: e.target.checked,
+                    }],
+                  }],
+                },
+              });
             }}
           />
           Ignore Weak Gravity
         </label>
+        <button
+          disabled={
+            !(
+              history.currentTurn.phase === GameTurnPhase.Astrogation
+              && history.currentTurn.astrogationsInProgress.every(s =>
+                s.ignoredFirstWeakGravityBodies.every(i => i.planned)
+                && s.thrust.planned
+              )
+            )
+          }
+          onClick={(_e) => {
+            if (history.currentTurn.phase !== GameTurnPhase.Astrogation) return;
+            const astrogations = history.currentTurn.astrogationsInProgress
+              .filterTransform((astrogation): Optional<ElementTypeOf<(GameHistoryTurn & { phase: GameTurnPhase.Complete })["astrogation"]>> => {
+                const ignores = astrogation.ignoredFirstWeakGravityBodies.filterTransform(i => i.planned ? opt(i) : nullopt);
+                if (ignores.length !== astrogation.ignoredFirstWeakGravityBodies.length) return nullopt;
+                if (!astrogation.thrust.planned) return nullopt;
+                return opt({
+                  ignoredFirstWeakGravityBodies: ignores.filterTransform(i => i.plannedIgnore ? opt(i.iBody) : nullopt),
+                  ...astrogation.thrust,
+                  rollout: astrogation.rollout,
+                });
+              });
+            if (astrogations.length !== history.currentTurn.astrogationsInProgress.length) return;
+            const newIPlayerActive = (history.currentTurn.iPlayerActive + 1) % playerCount;
+            const newState: GameHistoryTurn["startingState"] = {
+              ships: history.currentTurn.startingState.ships.map((s, iPlayer) => {
+                if (iPlayer !== history.currentTurn.iPlayerActive) return s;
+                return s.takeZip(astrogations)
+                  .map(([start, astrogation]): Element2TypeOf<GameHistoryTurn["startingState"]["ships"]> =>
+                    start.eliminated
+                      ? start
+                      : ({
+                        eliminated: false,
+                        position: astrogation.rollout.endPosition,
+                        ballisticRollout: physicsStep({
+                          thrust: zeroPos,
+                          ignoredFirstWeakGravityBodyIndices: [],
+                          lastPosition: start.position,
+                          position: astrogation.rollout.endPosition,
+                        }),
+                        fuelMax: start.fuelMax,
+                        fuelCurrent: astrogation.endFuel,
+                        overload: astrogation.endOverload,
+                      })
+                  );
+              }),
+            };
+            setHistoryRaw({
+              pastTurns: history.pastTurns.concat({
+                iPlayerActive: history.currentTurn.iPlayerActive,
+                startingState: history.currentTurn.startingState,
+                phase: GameTurnPhase.Complete,
+                astrogation: astrogations
+              }),
+              currentTurn: {
+                iPlayerActive: newIPlayerActive,
+                startingState: newState,
+                phase: GameTurnPhase.Astrogation,
+                astrogationsInProgress:
+                  throwOnNullopt(newState.ships.get(newIPlayerActive), "unexpected active player")
+                    .map((s): ElementTypeOf<(GameHistoryTurn & { phase: GameTurnPhase.Astrogation })["astrogationsInProgress"]> =>
+                      s.eliminated
+                        ? {
+                          ignoredFirstWeakGravityBodies: [],
+                          thrust: {
+                            planned: true,
+                            thrust: nullopt,
+                            overloaded: false,
+                            endFuel: 0,
+                            endOverload: OverloadStatus.Unsupported,
+                          },
+                          rollout: {
+                            momentumAppliedFromLast: zeroPos,
+                            gravityAppliedFromLast: {
+                              gravityHexes: [],
+                              net: zeroPos,
+                            },
+                            netTransform: zeroPos,
+                            endPosition: zeroPos,
+                          },
+                        }
+                        : {
+                          ignoredFirstWeakGravityBodies: [...new Set(
+                            s.ballisticRollout.gravityAppliedFromLast.gravityHexes.flatMap(h =>
+                              h.bodies.filterTransform(b => b.gravityType === "strong" ? nullopt : opt(b.iBody))))]
+                            .map(iBody => ({ iBody, planned: false })),
+                          thrust: { planned: false },
+                          rollout: s.ballisticRollout,
+                        }
+                    ),
+              },
+            });
+          }}
+        >
+          Submit Turn
+        </button>
       </div>
 
       <div>
@@ -569,32 +704,46 @@ export default function App({ }: AppProps) {
                     r={hex.r}
                     s={hex.s}
                     onClick={() => {
-                      const transform = subPos_(fromHex(hex), shipPosition);
+                      if (history.currentTurn.phase !== GameTurnPhase.Astrogation) return;
+                      const ship = throwOnNullopt(throwOnNullopt(
+                        history.currentTurn.startingState.ships.get(history.currentTurn.iPlayerActive), "unexpected active player")
+                        .get(0), "one ship scenario");
+                      if (ship.eliminated) return;
+                      const transform = subPos_(fromHex(hex), fullPos(ship.position));
                       const distance = magnitude(transform);
-                      console.log(`click ${JSON.stringify({ hex, shipPosition, distance })}`);
-                      if (distance <= 2) {
-                        setHistory([
-                          ...history,
-                          {
-                            thrust: transform,
-                            ignoredFirstWeakGravityBodyIndices: appIgnoreWeak ? astralBodies.map((_, i) => i) : [],
-                          },
-                        ]);
-                      } else {
-                        setAppStartingPosition(fromHex(hex));
-                        setHistoryRaw([]);
-                        historyMemoizations.current = [];
-                      }
+                      console.log(`click ${JSON.stringify({ hex, position: ship.position, distance })}`);
+                      if (distance > 2) return;
+                      const overload = distance > 1;
+                      if (ship.overload !== OverloadStatus.Available && overload) return;
+                      const fuelUse = distance;
+                      if (fuelUse > ship.fuelCurrent) return;
+                      setHistoryAstrogationNewAstrogation({
+                        ...history,
+                        currentTurn: {
+                          ...history.currentTurn,
+                          astrogationsInProgress: [{
+                            ...throwOnNullopt(history.currentTurn.astrogationsInProgress.get(0), "one ship scenario"),
+                            thrust: {
+                              planned: true,
+                              thrust: distance == 0 ? nullopt : opt(transform),
+                              overloaded: overload,
+                              endFuel: ship.fuelCurrent - fuelUse,
+                              endOverload: overload ? OverloadStatus.Used : ship.overload,
+                            },
+                          }],
+                        },
+                      });
                     }}
                   >
                     {
                       generatedAsteroidFields
                         .filter(f => posEqual(f.position, fromHex(hex)))
-                        .map(f => {
+                        .map((f, iField) => {
                           const radiusRange: [number, number] = [0.01, 0.11];
                           const spread = 1.3;
-                          return f.asteroids.map(a =>
+                          return f.asteroids.map((a, iAsteroid) =>
                             <circle
+                              key={`${iField};${iAsteroid}`}
                               cx={a.x * unitsPerFaceDiameter / 2 * (1 - radiusRange[1]) * spread}
                               cy={a.y * unitsPerFaceDiameter / 2 * (1 - radiusRange[1]) * spread}
                               r={lerp(radiusRange[0], radiusRange[1], a.radius) * unitsPerVertexDiameter / 2}
@@ -632,87 +781,162 @@ export default function App({ }: AppProps) {
                       })()
                     }
                     {
-                      // ship
-                      (() => {
-                        if (!posEqual(shipPosition, fromHex(hex))) return undefined;
-                        const width = unitsPerFaceDiameter / 2 * 1;
-                        return <rect
-                          x={-width / 2}
-                          y={-width / 2}
-                          width={width}
-                          height={width}
-                          fill={"pink"}
-                          fillOpacity="1.0"
-                        />;
-                      })()
+                      // ships
+                      history.currentTurn.startingState.ships
+                        .map((ships, iPlayer) => ({ iPlayer, ships }))
+                        .rotate((history.currentTurn.iPlayerActive + 1) % playerCount) // render the active player's ships last / on top
+                        .flatMap(playerShips =>
+                          playerShips.ships.filterTransform((ship, iShip) => {
+                            if (ship.eliminated || !posEqual(ship.position, fromHex(hex))) return nullopt;
+                            const width = unitsPerFaceDiameter / 2 * 1;
+                            return opt(<rect
+                              key={`${playerShips.iPlayer}.${iShip}`}
+                              x={-width / 2}
+                              y={-width / 2}
+                              width={width}
+                              height={width}
+                              fill={playerShips.iPlayer == 0 ? "pink" : "lime"}
+                              fillOpacity="1.0"
+                            />);
+                          }))
                     }
                     {
                       // arrows
-                      history.takeZip(historyMemoizations.current)
-                        .flatMap(([h, m], i) => {
-                          if (!posEqual(m.startPosition, fromHex(hex))) return [];
-                          const dx = unitsPerVertexSpacing * (m.netTransform.q);
-                          const dy = unitsPerFaceDiameter * (m.netTransform.r + m.netTransform.q / 2);
-                          const d = Math.sqrt(dx * dx + dy * dy);
-                          const scale = (d - unitsPerFaceDiameter * 0.3) / d;
-                          return [
-                            <Arrow
-                              key={`${i}transform`}
-                              x2={unitsPerVertexSpacing * (m.netTransform.q) * scale}
-                              y2={unitsPerFaceDiameter * (m.netTransform.r + m.netTransform.q / 2) * scale}
-                              color="white"
-                              strokeWidth={0.2}
-                              opacity={Math.max(0, 1 + (i - history.length + 1) / 10)}
-                            />,
-                            ...(() => {
-                              if (history.length - i > 5) return [];
-                              const subArrows: ({ props: ArrowProps } & { transform: Position, key: string })[] = [
-                                {
-                                  key: "momentum",
-                                  transform: m.momentumAppliedFromLast,
-                                  props: {
-                                    color: "green",
-                                    strokeWidth: 0.1,
-                                    opacity: 0.5,
-                                  },
-                                },
-                                {
-                                  key: "gravity",
-                                  transform: m.gravityAppliedFromLast.net,
-                                  props: {
-                                    color: "#600c94",
-                                    strokeWidth: 0.1,
-                                    opacity: 0.7,
-                                  }
-                                },
-                                {
-                                  key: "thrust",
-                                  transform: h.thrust,
-                                  props: {
-                                    color: "orange",
-                                    strokeWidth: 0.13,
-                                    opacity: 0.8,
-                                  },
-                                },
-                              ];
+                      throwOnNullopt(
+                        history.pastTurns
+                          .concat(
+                            history.currentTurn.phase == GameTurnPhase.Astrogation
+                              ? []
+                              : [history.currentTurn]
+                          )
+                          .map(t => {
+                            return {
+                              iPlayerActive: t.iPlayerActive,
+                              astrogation:
+                                throwOnNullopt(t.startingState.ships.get(t.iPlayerActive), "iPlayerActive and ships length mismatch")
+                                  .takeZip(t.astrogation)
+                                  .map(([startingState, astrogation]) =>
+                                    startingState.eliminated
+                                      ? asType<{ eliminated: true }>()({ eliminated: true })
+                                      : {
+                                        eliminated: false as false,
+                                        startPosition: startingState.position,
+                                        ignoredFirstWeakGravityBodies: astrogation.ignoredFirstWeakGravityBodies,
+                                        thrust: astrogation.thrust,
+                                        overloaded: astrogation.overloaded,
+                                        rollout: astrogation.rollout,
+                                      }
+                                  ),
+                            };
+                          })
+                          .concat({
+                            iPlayerActive: history.currentTurn.iPlayerActive,
+                            astrogation:
+                              history.currentTurn.phase == GameTurnPhase.Astrogation
+                                ? throwOnNullopt(history.currentTurn.startingState.ships.get(history.currentTurn.iPlayerActive), "iPlayerActive and ships length mismatch")
+                                  .takeZip(history.currentTurn.astrogationsInProgress)
+                                  .map(([startingState, astrogationInProgress]) =>
+                                    startingState.eliminated
+                                      ? asType<{ eliminated: true }>()({ eliminated: true })
+                                      : {
+                                        eliminated: false as false,
+                                        startPosition: startingState.position,
+                                        ignoredFirstWeakGravityBodies:
+                                          astrogationInProgress.ignoredFirstWeakGravityBodies
+                                            .filter(b => b.planned && b.plannedIgnore)
+                                            .map(b => b.iBody),
+                                        thrust:
+                                          astrogationInProgress.thrust.planned
+                                            ? astrogationInProgress.thrust.thrust
+                                            : nullopt,
+                                        overloaded:
+                                          astrogationInProgress.thrust.planned && astrogationInProgress.thrust.thrust.hasValue
+                                            ? magnitude(fullPos(astrogationInProgress.thrust.thrust.value)) > 1
+                                            : false,
+                                        rollout: astrogationInProgress.rollout,
+                                      }
+                                  )
+                                : []
+                          })
+                          .map((t, iTurn) => ({ iTurn, ...t }))
+                          .groupByAtMost(t => t.iPlayerActive, new Set(Array(playerCount).fill(false).map((_, i) => i))), "turn has unexpected active player")
+                        .rotate((history.currentTurn.iPlayerActive + 1) % playerCount) // render the active player's ships last / on top
+                        .flatMap(playerHistory =>
+                          takeZipAll(...playerHistory.group.map(turn => turn.astrogation.map(shipAstrogation => ({
+                            iTurn: turn.iTurn,
+                            astrogation: shipAstrogation,
+                          }))))
+                            .flatMap((shipHistory, iShip) =>
+                              shipHistory.flatMap(shipTurn => {
+                                if (shipTurn.astrogation.eliminated === true) return [];
+                                if (!posEqual(shipTurn.astrogation.startPosition, fromHex(hex))) return [];
+                                const dx = unitsPerVertexSpacing * (shipTurn.astrogation.rollout.netTransform.q);
+                                const dy = unitsPerFaceDiameter * (shipTurn.astrogation.rollout.netTransform.r + shipTurn.astrogation.rollout.netTransform.q / 2);
+                                const d = Math.sqrt(dx * dx + dy * dy);
+                                const scale = (d - unitsPerFaceDiameter * 0.3) / d;
+                                return [
+                                  <Arrow
+                                    key={`${playerHistory.key};${iShip};${shipTurn.iTurn};transform`}
+                                    x2={unitsPerVertexSpacing * (shipTurn.astrogation.rollout.netTransform.q) * scale}
+                                    y2={unitsPerFaceDiameter * (shipTurn.astrogation.rollout.netTransform.r + shipTurn.astrogation.rollout.netTransform.q / 2) * scale}
+                                    color="white"
+                                    strokeWidth={0.2}
+                                    opacity={Math.max(0, 1 + (shipTurn.iTurn - history.pastTurns.length + 2) / 10)}
+                                  />,
+                                  ...(() => {
+                                    if (history.pastTurns.length - shipTurn.iTurn + 1 > 5) return [];
+                                    const subArrows: ({ props: ArrowProps } & { transform: Position, key: string })[] = [
+                                      {
+                                        key: "momentum",
+                                        transform: shipTurn.astrogation.rollout.momentumAppliedFromLast,
+                                        props: {
+                                          color: "green",
+                                          strokeWidth: 0.1,
+                                          opacity: 0.5,
+                                        },
+                                      },
+                                      {
+                                        key: "gravity",
+                                        transform: shipTurn.astrogation.rollout.gravityAppliedFromLast.net,
+                                        props: {
+                                          color: "#600c94",
+                                          strokeWidth: 0.1,
+                                          opacity: 0.7,
+                                        }
+                                      },
+                                    ].concat(
+                                      shipTurn.astrogation.thrust.hasValue
+                                        ? [{
+                                          key: "thrust",
+                                          transform: shipTurn.astrogation.thrust.value,
+                                          props: {
+                                            color: "orange",
+                                            strokeWidth: 0.13,
+                                            opacity: 0.8,
+                                          },
+                                        }]
+                                        : []
+                                    );
 
-                              let pos = { x: 0, y: 0 };
-                              return subArrows.filter(a => !posEqual(a.transform, zeroPos)).map(a => {
-                                const startPos = pos;
-                                pos = { x: pos.x + unitsPerVertexSpacing * a.transform.q, y: pos.y + unitsPerFaceDiameter * (a.transform.r + a.transform.q / 2) };
-                                return <Arrow
-                                  key={`${i}${a.key}`}
-                                  x1={startPos.x}
-                                  y1={startPos.y}
-                                  x2={pos.x}
-                                  y2={pos.y}
-                                  color={a.props.color}
-                                  {...a.props}
-                                />;
-                              });
-                            })()
-                          ];
-                        })
+                                    let pos = { x: 0, y: 0 };
+                                    return subArrows.filter(a => !posEqual(a.transform, zeroPos)).map(a => {
+                                      const startPos = pos;
+                                      pos = { x: pos.x + unitsPerVertexSpacing * a.transform.q, y: pos.y + unitsPerFaceDiameter * (a.transform.r + a.transform.q / 2) };
+                                      return <Arrow
+                                        key={`${playerHistory.key};${iShip};${shipTurn.iTurn};${a.key}`}
+                                        x1={startPos.x}
+                                        y1={startPos.y}
+                                        x2={pos.x}
+                                        y2={pos.y}
+                                        color={a.props.color}
+                                        {...a.props}
+                                      />;
+                                    });
+                                  })()
+                                ];
+                              })
+                            )
+                        )
                     }
                   </Hexagon>
                 ))

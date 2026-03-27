@@ -49,7 +49,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
   "Mercury": {
     name: "Mercury",
     position: { q: 51, r: -10 },
-    faceFill: 0.28,
+    faceFill: 0.29,
     faceFillOriginal: 0.27,
     color: "#B3A3AA",
     type: AstralBodyType.Planet,
@@ -59,7 +59,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
   "Venus": {
     name: "Venus",
     position: { q: 51, r: -1 },
-    faceFill: 0.34,
+    faceFill: 0.35,
     faceFillOriginal: 0.38,
     color: "#E5CEA3",
     type: AstralBodyType.Planet,
@@ -69,7 +69,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
   "Terra": {
     name: "Terra",
     position: { q: 41, r: -12 },
-    faceFill: 0.35,
+    faceFill: 0.37,
     faceFillOriginal: 0.37,
     color: "#1E90FF",
     type: AstralBodyType.Planet,
@@ -79,7 +79,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
   "Luna": {
     name: "Luna",
     position: { q: 40, r: -14 },
-    faceFill: 0.26,
+    faceFill: 0.25,
     faceFillOriginal: 0.20,
     color: "#DCDCDC",
     type: AstralBodyType.Planet,
@@ -89,7 +89,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
   "Mars": {
     name: "Mars",
     position: { q: 27, r: 14 },
-    faceFill: 0.30,
+    faceFill: 0.31,
     faceFillOriginal: 0.40,
     color: "#B22222",
     type: AstralBodyType.Planet,
@@ -99,7 +99,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
   "Ceres": {
     name: "Ceres",
     position: { q: 20, r: 14 },
-    faceFill: 0.19,
+    faceFill: 0.18,
     faceFillOriginal: 0.3,
     color: "#D0D0D0",
     type: AstralBodyType.Asteroid,
@@ -107,7 +107,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
   "Clandestine": {
     name: "Clandestine",
     position: { q: 21, r: -3 },
-    faceFill: 0.16,
+    faceFill: 0.15,
     faceFillOriginal: 0.3,
     color: "#BBBBDD",
     type: AstralBodyType.Asteroid,
@@ -125,7 +125,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
   "Callisto": {
     name: "Callisto",
     position: { q: 11, r: 15 },
-    faceFill: 0.28,
+    faceFill: 0.27,
     faceFillOriginal: 0.15,
     color: "#907000",
     type: AstralBodyType.Planet,
@@ -135,7 +135,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
   "Io": {
     name: "Io",
     position: { q: 13, r: 9 },
-    faceFill: 0.26,
+    faceFill: 0.25,
     faceFillOriginal: 0.16,
     color: "#CCC200",
     type: AstralBodyType.Planet,
@@ -145,7 +145,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
   "Ganymede": {
     name: "Ganymede",
     position: { q: 9, r: 9 },
-    faceFill: 0.29,
+    faceFill: 0.28,
     faceFillOriginal: 0.14,
     color: "#A3A3EE",
     type: AstralBodyType.Planet,
@@ -155,7 +155,7 @@ export const astralBodiesMap: { [name in (typeof astralBodyNames)[number]]: Astr
   "Europa": {
     name: "Europa",
     position: { q: 8, r: 13 },
-    faceFill: 0.25,
+    faceFill: 0.24,
     faceFillOriginal: 0.15,
     color: "#C0FFFF",
     type: AstralBodyType.Planet,
@@ -209,18 +209,19 @@ export type AstrogationRolloutStep = {
 }
 
 export type GameHistoryTurnStartingState = {
-  ships:
-  | { eliminated: true }
-  | {
-    eliminated: false,
-    position: Position,
-    astrogationRollout: AstrogationRolloutStep,
-    fuelMax: number,
-    fuelCurrent: number,
-    overload: OverloadStatus,
-    gunStrength: number,
-    damage: number,
-  }[][], // [player][]
+  ships: (
+    | { eliminated: true }
+    | {
+      eliminated: false,
+      position: Position,
+      ballisticRollout: AstrogationRolloutStep,
+      fuelMax: number,
+      fuelCurrent: number,
+      overload: OverloadStatus,
+      //gunStrength: number,
+      //damage: number,
+    }
+  )[][], // [player][]
 };
 
 export type GameHistoryTurnAstrogationInProgress = {
@@ -236,7 +237,7 @@ export type GameHistoryTurnAstrogationInProgress = {
     | { planned: false }
     | {
       planned: true,
-      thrust: Optional<Side>,
+      thrust: Optional<Position>,
       overloaded: boolean,
       endFuel: number,
       endOverload: OverloadStatus,
@@ -249,10 +250,11 @@ export type GameHistoryTurnAstrogationInProgress = {
 export type GameHistoryTurnAstrogationComplete = {
   astrogation: {
     ignoredFirstWeakGravityBodies: number[],
-    thrust: Optional<Side>,
+    thrust: Optional<Position>,
     overloaded: boolean,
-    rollout: AstrogationRolloutStep,
     endFuel: number,
+    endOverload: OverloadStatus,
+    rollout: AstrogationRolloutStep,
   }[], // [active player ship]
 };
 // committing Astrogation is pretty trivial -- just do it in the app
@@ -327,7 +329,12 @@ export type GameHistoryTurn =
   & (
     | ({ phase: GameTurnPhase.Astrogation } & GameHistoryTurnAstrogationInProgress)
     | (
-      & { phase: GameTurnPhase.Combat | GameTurnPhase.Resupply | GameTurnPhase.Complete }
+      & {
+        phase:
+        //| GameTurnPhase.Combat
+        //| GameTurnPhase.Resupply
+        | GameTurnPhase.Complete
+      }
       & GameHistoryTurnAstrogationComplete
     )
   )

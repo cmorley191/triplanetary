@@ -1,4 +1,4 @@
-import { Optional, nullopt, opt, optValueOr } from "./optional"
+import { Optional, nullopt, opt, optBind, optValueOr } from "./optional"
 
 export type ArrayEveryTransformResult<U> =
   | { testResult: true, transformed: U }
@@ -18,7 +18,31 @@ declare global {
     filterTransform<U>(predicate: (element: T, index: number) => Optional<U>): U[]
 
     get(index: number): Optional<T>;
+    /**
+     * Keys are used to sort elements into groups, in the order that the keys first appear in the array.
+     */
     groupBy<TKey>(keySelector: (element: T, index: number) => TKey): { key: TKey, group: T[] }[]
+    /**
+     * Like groupBy, but:
+     * - empty groups are included for any keys in `requiredKeys` that do not have corresponding elements in the array, and
+     * - the returned groups are ordered by the order of `requiredKeys`; 
+     *   other groups (with a key *not* in `requiredKeys`) are appended in the order that the keys first appear in the array.
+     */
+    groupByAtLeast<TKey>(keySelector: (element: T, index: number) => TKey, requiredKeys: Set<TKey>): { key: TKey, group: T[] }[]
+    /**
+     * Like groupBy, but:
+     * - empty groups are included for any keys in `requiredKeys` that do not have corresponding elements in the array, and
+     * - returns nullopt if any elements have a key that is not in `requiredKeys`, and
+     * - the returned groups are ordered by the order of `requiredKeys`.
+     */
+    groupByAtMost<TKey>(keySelector: (element: T, index: number) => TKey, requiredKeys: Set<TKey>): Optional<{ key: TKey, group: T[] }[]>
+    /**
+     * Like groupBy, but:
+     * - returns nullopt if any keys in `requiredKeys` do not have a corresponding element in the array, and
+     * - returns nullopt if any elements have a key that is not in `requiredKeys`, and
+     * - the returned groups are ordered by the order of `requiredKeys`.
+     */
+    groupByExactly<TKey>(keySelector: (element: T, index: number) => TKey, requiredKeys: Set<TKey>): Optional<{ key: TKey, group: T[] }[]>
 
     /**
      * Splits the array into arrays of the specified size, grouping adjacent elements.
@@ -37,6 +61,15 @@ declare global {
     permute(): T[][]
 
     pop_(index?: Optional<number>): Optional<T>;
+
+    /**
+     * Enumerates the array starting from `start` and looping around until `start` is reached again.
+     * 
+     * Equivalent to arr.skip(start).concat(arr.take(start)).
+     * 
+     * e.g. `[2, 4, 6, 8, 10].rotate(2)` returns `[6, 8, 10, 2, 4]`
+     */
+    rotate(start: number): T[],
 
     /**
      * Splits the array into two arrays `[trues, falses]` using the predicate.
@@ -100,17 +133,34 @@ Array.prototype.get = function <T>(this: T[], index: number): Optional<T> {
 };
 
 Array.prototype.groupBy = function <T, TKey>(this: T[], keySelector: (element: T, index: number) => TKey) {
-  const groups: { key: TKey, group: T[] }[] = [];
+  return this.groupByAtLeast(keySelector, new Set<TKey>());
+}
+Array.prototype.groupByAtLeast = function <T, TKey>(this: T[], keySelector: (element: T, index: number) => TKey, requiredKeys: Set<TKey>) {
+  const groups = new Map<TKey, T[]>([...requiredKeys.values()].map(key => [key, []]));
   this.forEach((x, i) => {
     const key = keySelector(x, i);
-    const matchingGroup = groups.filter(g => g.key == key)[0];
+    const matchingGroup = groups.get(key);
     if (matchingGroup === undefined) {
-      groups.push({ key, group: [x] });
+      groups.set(key, [x]);
     } else {
-      matchingGroup.group.push(x);
+      matchingGroup.push(x);
     }
   });
-  return groups;
+  return [...groups.entries()].map(([key, group]) => ({ key, group }));
+}
+Array.prototype.groupByAtMost = function <T, TKey>(this: T[], keySelector: (element: T, index: number) => TKey, requiredKeys: Set<TKey>) {
+  const result = this.groupByAtLeast(keySelector, requiredKeys);
+  if (result.length != requiredKeys.size) return nullopt;
+  else return opt(result);
+}
+Array.prototype.groupByExactly = function <T, TKey>(this: T[], keySelector: (element: T, index: number) => TKey, requiredKeys: Set<TKey>) {
+  return optBind(
+    this.groupByAtMost(keySelector, requiredKeys),
+    result => {
+      if (result.some(g => g.group.length == 0)) return nullopt;
+      else return opt(result);
+    }
+  );
 }
 
 Array.prototype.groupwise = function <T>(this: T[], groupSize: number) {
@@ -179,6 +229,10 @@ Array.prototype.pop_ = function <T>(this: T[], index: Optional<number> = nullopt
   }
   // scary nonnull assertion! but removing the `| undefined` caused by index out of bounds is the whole point of this function.
   return opt(this.splice(index_, 1)[0]!);
+}
+
+Array.prototype.rotate = function <T>(this: T[], start: number): T[] {
+  return this.skip(start).concat(this.take(start));
 }
 
 Array.prototype.shallowCopy = function <T>(this: T[]) {

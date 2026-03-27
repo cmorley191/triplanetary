@@ -1,4 +1,4 @@
-import { nullopt, nullopt_, opt, Optional, optValueOr } from "./optional";
+import { nullopt, nullopt_, opt, Optional, optValueOr, throwOnNullopt } from "./optional";
 
 /**
  * Does nothing / passthrough at runtime. Causes a compile error (assuming strict mode) if the passed in value is not of the specified type.
@@ -24,6 +24,9 @@ export function assertType<AssertType>(x: AssertType): AssertType {
 export function asType<T>(): <U extends T>(x: U) => T {
   return x => x;
 }
+
+export type ElementTypeOf<TArray> = TArray extends (infer TElement)[] ? TElement : never;
+export type Element2TypeOf<TArray> = TArray extends (infer TElement)[][] ? TElement : never;
 
 /**
  * Returns a copy of the given object with the specified keys removed (if they are present).
@@ -188,4 +191,22 @@ export function map2<T, U>(arr: [T, T], mapper: (value: T, index: 0 | 1) => U): 
 }
 export function map3<T, U>(arr: [T, T, T], mapper: (value: T, index: 0 | 1 | 2) => U): [U, U, U] {
   return [mapper(arr[0], 0), mapper(arr[1], 1), mapper(arr[2], 2)];
+}
+
+/**
+ * Like zipAll, but extra elements are dropped if some of the arrays are bigger than others.
+ */
+export function takeZipAll<T>(...arrs: T[][]): T[][] {
+  if (arrs.length === 0) return [];
+  const minLength = Math.min(...arrs.map(arr => arr.length));
+  return Array(minLength).fill(false).map((_, i) => arrs.map(arr => throwOnNullopt(arr.get(i), "takeZipAll limited index impossibility")));
+}
+/**
+ * Like zip, but accepts an arbitrary number of arrays to zip together.
+ */
+export function zipAll<T>(...arrs: T[][]): Optional<T[][]> {
+  const [firstArr] = arrs.take1();
+  if (!firstArr.hasValue) return nullopt;
+  if (arrs.some(arr => arr.length != firstArr.value.length)) return nullopt;
+  return opt(takeZipAll(...arrs));
 }
