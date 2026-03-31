@@ -5,7 +5,7 @@ import * as React from "react";
 
 import { HexGrid, Layout, Hexagon, Hex } from 'react-hexgrid';
 
-import { asteroidFields, astralBodies, astralBodiesMap, AstralBodyType, GameHistoryTurn, GameTurnPhase, OverloadStatus } from "../game/game";
+import { asteroidFields, astralBodies, astralBodiesMap, AstralBodyType, AstrogationRolloutStep, GameHistoryTurn, GameTurnPhase, OverloadStatus } from "../game/game";
 import { nullopt, opt, Optional, optValueOr, throwOnNullopt } from "../core/optional";
 import { assertType, asType, Element2TypeOf, ElementTypeOf, getRandomInt, lerp, map2, satisfiesCheck, takeZipAll, tuple2, weightedRandom } from '../core/misc';
 import { addPos, fromHex, fullPos, getHexInteractions, magnitude, PathInteractionType, posEqual, Position, scalePos, sides, subPos, subPos_, zeroPos } from '../game/hex';
@@ -93,8 +93,8 @@ function physicsStep(input: {
   thrust: Position,
   ignoredFirstWeakGravityBodyIndices: number[],
   lastPosition: Position,
-  position: Position
-}) {
+  position: Position,
+}): AstrogationRolloutStep {
   const handledFirstWeakGravityBodyIndices: number[] = [];
   const gravityHexes =
     getHexInteractions({ start: input.lastPosition, end: input.position })
