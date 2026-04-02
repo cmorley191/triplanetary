@@ -3,7 +3,8 @@ import "../core/array_extensions";
 
 import * as React from "react";
 
-import { HexGrid, Layout, Hexagon, Hex } from 'react-hexgrid';
+import { HexGrid, Layout, Hexagon, Hex, HexUtils } from 'react-hexgrid';
+import { useLayoutContext } from 'react-hexgrid/lib/Layout';
 
 import { asteroidFields, astralBodies, astralBodiesMap, AstralBodyType, GameHistoryTurn, GameTurnPhase, OverloadStatus, physicsStep } from "../game/game";
 import { nullopt, opt, Optional, optValueOr, throwOnNullopt } from "../core/optional";
@@ -253,9 +254,13 @@ type AsteroidFieldData = {
 type AsteroidFieldProps =
   & AsteroidFieldData
   & {
+    position: Position;
     sideNeighbors: Optional<AsteroidFieldData>[];
   };
 const AsteroidField: React.FC<AsteroidFieldProps> = (props: AsteroidFieldProps) => {
+  const { layout } = useLayoutContext();
+  const pixel = React.useMemo(() => HexUtils.hexToPixel(props.position, layout), [props.position]);
+
   const asteroids = React.useMemo(() => {
     const neighborCount = props.sideNeighbors.filter(n => n.hasValue).length;
 
@@ -358,7 +363,9 @@ const AsteroidField: React.FC<AsteroidFieldProps> = (props: AsteroidFieldProps) 
 
   const radiusRange: [number, number] = [0.01, 0.11];
   const spread = 1.3;
-  return <g>
+  return <g
+    transform={`translate(${pixel.x},${pixel.y})`}
+  >
     {
       asteroids.map((a, iAsteroid) =>
         <circle
@@ -621,6 +628,11 @@ export default function App({ }: AppProps) {
           viewBox={`${-unitsPerVertexDiameter / 2} ${-unitsPerFaceDiameter / 2} ${viewBoxSize.width} ${viewBoxSize.height}`}
         >
           <Layout origin={{ x: 0, y: 0 }} size={{ x: 1, y: 1 }}>
+            <g>
+              {
+                allAsteroidFields.map((f, iField) => <AsteroidField key={iField} {...f} />)
+              }
+            </g>
             {
               hexagons
                 .map((hex, ihex) => (
@@ -661,9 +673,6 @@ export default function App({ }: AppProps) {
                       });
                     }}
                   >
-                    {
-                      allAsteroidFields.filter((f) => posEqual(f.position, hex)).map((f, iField) => <AsteroidField key={iField} {...f} />)
-                    }
                     {
                       astralBodies
                         .filter(body => posEqual(body.position, fromHex(hex)))
