@@ -1,3 +1,4 @@
+import { getRandomInt } from "./misc"
 import { Optional, nullopt, opt, optBind, optValueOr } from "./optional"
 
 export type ArrayEveryTransformResult<U> =
@@ -83,6 +84,9 @@ declare global {
 
     shallowCopy(): T[]
 
+    /** Shuffles in place. Call shallowCopy() first if this is a problem. */
+    shuffled(): T[]
+
     skip(count: number): T[]
     take(count: number): T[]
     take1(): [Optional<T>]
@@ -93,7 +97,7 @@ declare global {
      * Like zip, but extra elements are dropped if one of the arrays is bigger than the other.
      */
     takeZip<U>(other: U[]): [T, U][]
-    zip<U>(other: U[]): [T, U][] | undefined
+    zip<U>(other: U[]): Optional<[T, U][]>
   }
 }
 
@@ -239,6 +243,17 @@ Array.prototype.shallowCopy = function <T>(this: T[]) {
   return [...this];
 }
 
+Array.prototype.shuffled = function <T>(this: T[]): T[] {
+  let swapsRemaining = this.length;
+  while (swapsRemaining > 0) {
+    const randomIndex = getRandomInt(swapsRemaining);
+    swapsRemaining--;
+    [this[swapsRemaining], this[randomIndex]] = [
+      this[randomIndex]!, this[swapsRemaining]!];
+  }
+  return this;
+}
+
 Array.prototype.splitMap = function <T, U>(this: T[], predicate: (element: T, index: number) => [boolean, U]) {
   const trues: U[] = [];
   const falses: U[] = [];
@@ -281,7 +296,7 @@ Array.prototype.takeZip = function <T, U>(this: T[], other: U[]) {
 }
 Array.prototype.zip = function <T, U>(this: T[], other: U[]) {
   if (this.length !== other.length) {
-    return undefined;
+    return nullopt;
   }
-  return this.takeZip(other);
+  return opt(this.takeZip(other));
 }

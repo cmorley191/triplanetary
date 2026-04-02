@@ -64,6 +64,8 @@ export function minmax(a: number, b: number): { min: number, max: number } {
   else return { min: b, max: a };
 }
 
+export function clamp(min: number, max: number, x: number) { return Math.max(min, Math.min(max, x)); }
+
 export function* unionGeneratorElement<T1, T2, U, V>(g: Generator<T1, U, V> | Generator<T2, U, V>): Generator<T1 | T2, U, V> {
   const firstElement = g.next();
   if (firstElement.done) {

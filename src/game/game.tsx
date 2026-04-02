@@ -1,6 +1,7 @@
 import { CSSProperties } from "react";
-import { Axis, Position, Side } from "./hex";
-import { Optional } from "../core/optional";
+import { addPos, Axis, fullPos, getHexInteractions, magnitude, PathInteractionType, posEqual, Position, scalePos, Side, subPos, zeroPos } from "./hex";
+import { nullopt, opt, Optional } from "../core/optional";
+import { satisfiesCheck } from "../core/misc";
 
 export enum AstralBodyType { Sun, Planet, Asteroid }
 
@@ -184,9 +185,6 @@ export const asteroidFields = [
     .map(f => ({ position: { q: q.q, r: f.r }, dense: f.dense }))
 );
 
-export enum OverloadStatus { Unsupported, Used, Available };
-export enum GameTurnPhase { Astrogation, Combat, Resupply, Complete };
-
 export type AstrogationRolloutStep = {
   momentumAppliedFromLast: Position,
   gravityAppliedFromLast: {
@@ -207,6 +205,109 @@ export type AstrogationRolloutStep = {
   netTransform: Position,
   endPosition: Position,
 }
+
+export function physicsStep(input: {
+  thrust: Position,
+  ignoredFirstWeakGravityBodyIndices: number[],
+  lastPosition: Position,
+  position: Position,
+}): AstrogationRolloutStep {
+  const handledFirstWeakGravityBodyIndices: number[] = [];
+  const gravityHexes =
+    getHexInteractions({ start: input.lastPosition, end: input.position })
+      .interactions
+      .skip(posEqual(input.lastPosition, input.position) ? 0 : 1) // skip starting hex - its gravity was applied last step
+      .flatMap((interaction) => {
+        if (interaction.type == PathInteractionType.Intersection) return [{
+          position: interaction.intersectedPosition,
+          requiredBodyDirection: nullopt,
+        }];
+        satisfiesCheck<PathInteractionType.EdgeTrace>(interaction.type);
+        return [
+          {
+            position: interaction.tracedPositions[0],
+            requiredBodyDirection: opt(subPos(interaction.tracedPositions[1], interaction.tracedPositions[0])),
+          },
+          {
+            position: interaction.tracedPositions[1],
+            requiredBodyDirection: opt(subPos(interaction.tracedPositions[0], interaction.tracedPositions[1])),
+          },
+        ];
+      })
+      .map(hex => {
+        const gravityBodies = astralBodies.filterTransform((body, iBody): Optional<{ iBody: number, gravity: Position, gravityType: "strong" | "applied weak" | "ignored weak", }> => {
+          if (body.type === AstralBodyType.Asteroid) return nullopt;
+
+          const transform = fullPos(subPos(body.position, hex.position));
+          const distance = magnitude(transform);
+          if (body.type === AstralBodyType.Planet) {
+            if (distance != 1) return nullopt;
+            if (hex.requiredBodyDirection.hasValue && !posEqual(transform, hex.requiredBodyDirection.value)) return nullopt;
+            return opt({
+              iBody,
+              gravity: transform,
+              gravityType: (() => {
+                if (!body.weakGravity) return "strong";
+                if (handledFirstWeakGravityBodyIndices.includes(iBody)) return "applied weak";
+                handledFirstWeakGravityBodyIndices.push(iBody);
+                if (input.ignoredFirstWeakGravityBodyIndices.includes(iBody)) return "ignored weak";
+                else return "applied weak";
+              })(),
+            });
+          }
+
+          satisfiesCheck<AstralBodyType.Sun>(body.type);
+          if (distance == 1) {
+            if (hex.requiredBodyDirection.hasValue && !posEqual(transform, hex.requiredBodyDirection.value)) return nullopt;
+            return opt({ iBody, gravity: scalePos(transform, 2), gravityType: "strong" });
+          } else if (distance == 2) {
+            const gravityType = (() => {
+              if (handledFirstWeakGravityBodyIndices.includes(iBody)) return "applied weak";
+              handledFirstWeakGravityBodyIndices.push(iBody);
+              if (input.ignoredFirstWeakGravityBodyIndices.includes(iBody)) return "ignored weak";
+              else return "applied weak";
+            })();
+            if (Math.abs(transform.q) == 1 || Math.abs(transform.r) == 1) return opt({ body, iBody, gravity: transform, gravityType });
+            const transformDirection = scalePos(transform, 1 / 2);
+            if (hex.requiredBodyDirection.hasValue && !posEqual(transformDirection, hex.requiredBodyDirection.value)) return nullopt;
+            return opt({ iBody, gravity: transformDirection, gravityType, })
+          }
+          else return nullopt;
+        });
+
+        const netStrong = gravityBodies.filter(b => b.gravityType === "strong").map(g => g.gravity).reduce(addPos, zeroPos);
+        const netWeak = gravityBodies.filter(b => b.gravityType !== "strong").map(g => g.gravity).reduce(addPos, zeroPos);
+        const netAppliedWeak = gravityBodies.filter(b => b.gravityType === "applied weak").map(g => g.gravity).reduce(addPos, zeroPos);
+
+        return {
+          position: hex.position,
+          netStrong,
+          netWeak,
+          netAppliedWeak,
+          net: addPos(netStrong, netAppliedWeak),
+          bodies: gravityBodies,
+        };
+      })
+      .filter(h => h.bodies.length > 0);
+  const momentumAppliedFromLast = subPos(input.position, input.lastPosition);
+  const gravityAppliedFromLast = {
+    gravityHexes,
+    net: gravityHexes.map(h => h.net).reduce(addPos, zeroPos),
+  };
+  const netTransform =
+    addPos(momentumAppliedFromLast,
+      addPos(gravityAppliedFromLast.net,
+        input.thrust));
+  return {
+    momentumAppliedFromLast,
+    gravityAppliedFromLast,
+    netTransform,
+    endPosition: addPos(input.position, netTransform),
+  };
+}
+
+export enum OverloadStatus { Unsupported, Used, Available };
+export enum GameTurnPhase { Astrogation, Combat, Resupply, Complete };
 
 export type GameHistoryTurnStartingState = {
   ships: (
