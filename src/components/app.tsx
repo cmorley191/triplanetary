@@ -6,8 +6,8 @@ import * as React from "react";
 import { HexGrid, Layout, Hexagon, Hex, HexUtils } from 'react-hexgrid';
 import { useLayoutContext } from 'react-hexgrid/lib/Layout';
 
-import { asteroidFields, astralBodies, astralBodiesMap, AstralBodyType, GameHistoryTurn, GameTurnPhase, OverloadStatus, physicsStep } from "../game/game";
-import { nullopt, opt, Optional, optValueOr, throwOnNullopt } from "../core/optional";
+import { asteroidFields, astralBodies, astralBodiesMap, AstralBodyName, astralBodyNames, AstralBodyType, GameHistoryTurn, GameHistoryTurnAstrogationComplete, GameTurnPhase, OverloadStatus, physicsStep } from "../game/game";
+import { nullopt, nullopt_, opt, Optional, optValueOr, throwOnNullopt } from "../core/optional";
 import { assertType, asType, clamp, Element2TypeOf, ElementTypeOf, getRandomInt, lerp, map2, satisfiesCheck, takeZipAll, tuple2, weightedRandom } from '../core/misc';
 import { addPos, fromHex, fullPos, getHexInteractions, magnitude, PathInteractionType, posEqual, Position, sides, subPos, subPos_, zeroPos } from '../game/hex';
 
@@ -46,30 +46,32 @@ const viewBoxSize = {
   height: unitsPerFaceDiameter * (mapSize.height + 0.5),
 }
 
-type ArrowProps = React.SVGProps<SVGLineElement> & {
-  id?: string;
-  x1?: number;
-  y1?: number;
-  x2?: number;
-  y2?: number;
-  strokeWidth?: number;
-  color?: string;
-  style?: React.CSSProperties;
-  className?: string;
-};
+type ArrowProps =
+  & Omit<React.SVGProps<SVGLineElement>, "start" | "end">
+  & {
+    id?: string;
+    start: Position;
+    end: Position;
+    strokeWidth?: number;
+    color?: string;
+    style?: React.CSSProperties;
+    className?: string;
+  };
 
 const Arrow: React.FC<ArrowProps> = ({
   id = "arrowhead",
-  x1 = 0,
-  y1 = 0,
-  x2 = 100,
-  y2 = 0,
+  start,
+  end,
   strokeWidth = 2,
   color = "currentColor",
   style = {},
   className = "",
   ...props
 }) => {
+  const { layout } = useLayoutContext();
+  const startPixel = React.useMemo(() => HexUtils.hexToPixel(start, layout), [start]);
+  const endPixel = React.useMemo(() => HexUtils.hexToPixel(end, layout), [end]);
+
   return (
     <>
       <defs>
@@ -91,10 +93,10 @@ const Arrow: React.FC<ArrowProps> = ({
       </defs>
 
       <line
-        x1={x1}
-        y1={y1}
-        x2={x2}
-        y2={y2}
+        x1={startPixel.x}
+        y1={startPixel.y}
+        x2={endPixel.x}
+        y2={endPixel.y}
         stroke={color}
         strokeWidth={strokeWidth}
         markerEnd={`url(#${id})`}
@@ -257,9 +259,12 @@ type AsteroidFieldProps =
     position: Position;
     sideNeighbors: Optional<AsteroidFieldData>[];
   };
-const AsteroidField: React.FC<AsteroidFieldProps> = (props: AsteroidFieldProps) => {
+const AsteroidField: React.FC<AsteroidFieldProps> = (props) => {
   const { layout } = useLayoutContext();
-  const pixel = React.useMemo(() => HexUtils.hexToPixel(props.position, layout), [props.position]);
+  const transform: Exclude<React.SVGProps<SVGGElement>["transform"], undefined> = React.useMemo(() => {
+    const pixel = HexUtils.hexToPixel(props.position, layout);
+    return `translate(${pixel.x},${pixel.y})`;
+  }, [props.position]);
 
   const asteroids = React.useMemo(() => {
     const neighborCount = props.sideNeighbors.filter(n => n.hasValue).length;
@@ -364,7 +369,7 @@ const AsteroidField: React.FC<AsteroidFieldProps> = (props: AsteroidFieldProps) 
   const radiusRange: [number, number] = [0.01, 0.11];
   const spread = 1.3;
   return <g
-    transform={`translate(${pixel.x},${pixel.y})`}
+    transform={transform}
   >
     {
       asteroids.map((a, iAsteroid) =>
@@ -378,7 +383,135 @@ const AsteroidField: React.FC<AsteroidFieldProps> = (props: AsteroidFieldProps) 
         />
       )
     }
-  </g>
+  </g>;
+};
+
+type AstralBodyProps = {
+  name: AstralBodyName;
+};
+const AstralBody: React.FC<AstralBodyProps> = (props) => {
+  const body = astralBodiesMap[props.name];
+
+  const { layout } = useLayoutContext();
+  const transform = React.useMemo(() => {
+    const pixel = HexUtils.hexToPixel(body.position, layout);
+    return `translate(${pixel.x},${pixel.y})`;
+  }, [props.name]);
+
+  return <circle
+    transform={transform}
+    cx="0"
+    cy="0"
+    r={unitsPerFaceDiameter / 2 * body.faceFill}
+    fill={body.color}
+    fillOpacity="1.0"
+  />;
+};
+
+type ShipProps = {
+  iPlayer: number;
+  eliminated: boolean;
+  position: Position;
+};
+const Ship: React.FC<ShipProps> = (props) => {
+  const { layout } = useLayoutContext();
+  const transform = React.useMemo<React.SVGProps<SVGGElement>["transform"]>(() => {
+    const pixel = HexUtils.hexToPixel(props.position, layout);
+    return `translate(${pixel.x},${pixel.y})`;
+  }, [props.position]);
+
+  const width = unitsPerFaceDiameter / 2 * 1;
+
+  if (props.eliminated) return <g transform={transform} />;
+
+  return <g transform={transform}>
+    <rect
+      x={-width / 2}
+      y={-width / 2}
+      width={width}
+      height={width}
+      fill={props.iPlayer == 0 ? "pink" : "lime"}
+      fillOpacity="1.0"
+    />
+  </g>;
+};
+
+type AstrogationMarkerProps =
+  & {
+    startPosition: Position;
+  }
+  & Pick<ElementTypeOf<GameHistoryTurnAstrogationComplete["astrogation"]>, "ignoredFirstWeakGravityBodies" | "thrust" | "overloaded" | "rollout">
+  & {
+    opacity: number;
+  };
+enum AstrogationMarkerArrowType { Transform, Momentum, Gravity, Thrust };
+const AstrogationMarker: React.FC<AstrogationMarkerProps> = (props) => {
+  return <g opacity={props.opacity}>
+    {
+      [{
+        key: AstrogationMarkerArrowType.Transform,
+        props: asType<ArrowProps>()({
+          start: props.startPosition,
+          end: addPos(props.startPosition, props.rollout.netTransform),
+
+          color: "white",
+          strokeWidth: 0.2,
+        }),
+      }]
+        .concat(
+          ...(() => {
+            let pos = props.startPosition;
+            return [
+              {
+                key: AstrogationMarkerArrowType.Momentum,
+                transform: props.rollout.momentumAppliedFromLast,
+                props: asType<Omit<ArrowProps, "start" | "end">>()({
+                  color: "green",
+                  strokeWidth: 0.1,
+                  opacity: 0.5,
+                }),
+              },
+              {
+                key: AstrogationMarkerArrowType.Gravity,
+                transform: props.rollout.gravityAppliedFromLast.net,
+                props: {
+                  color: "#600c94",
+                  strokeWidth: 0.1,
+                  opacity: 0.7,
+                }
+              },
+            ]
+              .concat(
+                props.thrust.hasValue
+                  ? [{
+                    key: AstrogationMarkerArrowType.Thrust,
+                    transform: props.thrust.value,
+                    props: {
+                      color: "orange",
+                      strokeWidth: 0.13,
+                      opacity: 0.8,
+                    },
+                  }]
+                  : []
+              )
+              .filter(a => !posEqual(a.transform, zeroPos))
+              .map(a => {
+                const startPos = pos;
+                pos = addPos(pos, a.transform);
+                return {
+                  key: a.key,
+                  props: {
+                    ...a.props,
+                    start: startPos,
+                    end: pos,
+                  },
+                };
+              });
+          })()
+        )
+        .map((a) => <Arrow key={a.key} {...a.props} />)
+    }
+  </g>;
 };
 
 type AppProps = {};
@@ -548,9 +681,9 @@ export default function App({ }: AppProps) {
             if (astrogations.length !== history.currentTurn.astrogationsInProgress.length) return;
             const newIPlayerActive = (history.currentTurn.iPlayerActive + 1) % playerCount;
             const newState: GameHistoryTurn["startingState"] = {
-              ships: history.currentTurn.startingState.ships.map((s, iPlayer) => {
-                if (iPlayer !== history.currentTurn.iPlayerActive) return s;
-                return s.takeZip(astrogations)
+              ships: history.currentTurn.startingState.ships.map((starts, iPlayer) => {
+                if (iPlayer !== history.currentTurn.iPlayerActive) return starts;
+                return starts.takeZip(astrogations)
                   .map(([start, astrogation]): Element2TypeOf<GameHistoryTurn["startingState"]["ships"]> =>
                     start.eliminated
                       ? start
@@ -628,9 +761,123 @@ export default function App({ }: AppProps) {
           viewBox={`${-unitsPerVertexDiameter / 2} ${-unitsPerFaceDiameter / 2} ${viewBoxSize.width} ${viewBoxSize.height}`}
         >
           <Layout origin={{ x: 0, y: 0 }} size={{ x: 1, y: 1 }}>
-            <g>
+            <g id="asteroid-fields">
               {
                 allAsteroidFields.map((f, iField) => <AsteroidField key={iField} {...f} />)
+              }
+            </g>
+            <g id="astral-bodies">
+              {
+                astralBodyNames.map((name, iBody) => <AstralBody key={iBody} name={name} />)
+              }
+            </g>
+            <g id="ships">
+              {
+                history.currentTurn.startingState.ships
+                  .map((ships, iPlayer) => ({ iPlayer, ships }))
+                  .rotate((history.currentTurn.iPlayerActive + 1) % playerCount) // render the active player's ships last / on top
+                  .flatMap(playerShips => playerShips.ships.map((ship, iShip) => {
+                    const position =
+                      !ship.eliminated
+                        ? opt(ship.position)
+                        : history.pastTurns.reduceRight((foundPosition, pastTurn) => {
+                          if (foundPosition.hasValue) return foundPosition;
+
+                          const pastTurnStarting = throwOnNullopt(throwOnNullopt(
+                            pastTurn.startingState.ships.get(playerShips.iPlayer), "wrong number of players")
+                            .get(iShip), "wrong number of ships");
+                          if (pastTurnStarting.eliminated) return nullopt;
+                          else if (pastTurn.iPlayerActive !== playerShips.iPlayer) opt(pastTurnStarting.position);
+
+                          return opt(throwOnNullopt(pastTurn.astrogation.get(iShip), "wrong number of ships").rollout.endPosition);
+                        }, nullopt_<Position>());
+                    return <Ship
+                      key={`${playerShips.iPlayer}.${iShip}`}
+                      iPlayer={playerShips.iPlayer}
+                      eliminated={ship.eliminated}
+                      position={throwOnNullopt(position, "ship has no starting position")}
+                    />;
+                  }))
+              }
+            </g>
+            <g id="astrogation-markers">
+              {
+                throwOnNullopt(
+                  history.pastTurns
+                    .concat(
+                      history.currentTurn.phase === GameTurnPhase.Astrogation
+                        ? []
+                        : [history.currentTurn]
+                    )
+                    .map(t => {
+                      return {
+                        iPlayerActive: t.iPlayerActive,
+                        astrogation:
+                          throwOnNullopt(t.startingState.ships.get(t.iPlayerActive), "iPlayerActive and ships length mismatch")
+                            .takeZip(t.astrogation)
+                            .map(([start, astrogation]) =>
+                              start.eliminated
+                                ? asType<{ eliminated: true }>()({ eliminated: true })
+                                : {
+                                  eliminated: false as false,
+                                  startPosition: start.position,
+                                  ignoredFirstWeakGravityBodies: astrogation.ignoredFirstWeakGravityBodies,
+                                  thrust: astrogation.thrust,
+                                  overloaded: astrogation.overloaded,
+                                  rollout: astrogation.rollout,
+                                }
+                            ),
+                      };
+                    })
+                    .concat({
+                      iPlayerActive: history.currentTurn.iPlayerActive,
+                      astrogation:
+                        history.currentTurn.phase == GameTurnPhase.Astrogation
+                          ? throwOnNullopt(history.currentTurn.startingState.ships.get(history.currentTurn.iPlayerActive), "iPlayerActive and ships length mismatch")
+                            .takeZip(history.currentTurn.astrogationsInProgress)
+                            .map(([start, astrogationInProgress]) =>
+                              start.eliminated
+                                ? asType<{ eliminated: true }>()({ eliminated: true })
+                                : {
+                                  eliminated: false as false,
+                                  startPosition: start.position,
+                                  ignoredFirstWeakGravityBodies:
+                                    astrogationInProgress.ignoredFirstWeakGravityBodies
+                                      .filter(b => b.planned && b.plannedIgnore)
+                                      .map(b => b.iBody),
+                                  thrust:
+                                    astrogationInProgress.thrust.planned
+                                      ? astrogationInProgress.thrust.thrust
+                                      : nullopt,
+                                  overloaded:
+                                    astrogationInProgress.thrust.planned && astrogationInProgress.thrust.thrust.hasValue
+                                      ? magnitude(fullPos(astrogationInProgress.thrust.thrust.value)) > 1
+                                      : false,
+                                  rollout: astrogationInProgress.rollout,
+                                }
+                            )
+                          : []
+                    })
+                    .map((t, iTurn) => ({ iTurn, ...t }))
+                    .groupByAtMost(t => t.iPlayerActive, new Set(Array(playerCount).fill(false).map((_, i) => i))), "turn has unexpected active player")
+                  .rotate((history.currentTurn.iPlayerActive + 1) % playerCount) // render the active player's ships last / on top
+                  .flatMap(playerHistory =>
+                    // astrogation[turn][ship] --zip--> astrogation[ship][turn]
+                    takeZipAll(...playerHistory.group.map(turn => turn.astrogation.map(shipAstrogation => ({
+                      iTurn: turn.iTurn,
+                      astrogation: shipAstrogation,
+                    }))))
+                      .flatMap((shipHistory, iShip) =>
+                        shipHistory.map(shipTurn => {
+                          if (shipTurn.astrogation.eliminated === true) return undefined;
+                          return <AstrogationMarker
+                            key={`${playerHistory.key};${iShip};${shipTurn.iTurn}`}
+                            {...shipTurn.astrogation}
+                            opacity={Math.max(0, 1 + (shipTurn.iTurn - history.pastTurns.length + 2) / 10)}
+                          />;
+                        })
+                      )
+                  )
               }
             </g>
             {
@@ -674,20 +921,6 @@ export default function App({ }: AppProps) {
                     }}
                   >
                     {
-                      astralBodies
-                        .filter(body => posEqual(body.position, fromHex(hex)))
-                        .map(((body, ibody) => (
-                          <circle
-                            key={`${ihex},${ibody}`}
-                            cx="0"
-                            cy="0"
-                            r={unitsPerFaceDiameter / 2 * body.faceFill}
-                            fill={body.color}
-                            fillOpacity="1.0"
-                          />
-                        )))
-                    }
-                    {
                       // axes
                       (() => {
                         if (!(hex.q % 10 == 0 && hex.r % 10 == 0)) return undefined;
@@ -699,164 +932,6 @@ export default function App({ }: AppProps) {
                           fillOpacity="0.0" // disabled, was 0.3
                         />
                       })()
-                    }
-                    {
-                      // ships
-                      history.currentTurn.startingState.ships
-                        .map((ships, iPlayer) => ({ iPlayer, ships }))
-                        .rotate((history.currentTurn.iPlayerActive + 1) % playerCount) // render the active player's ships last / on top
-                        .flatMap(playerShips =>
-                          playerShips.ships.filterTransform((ship, iShip) => {
-                            if (ship.eliminated || !posEqual(ship.position, fromHex(hex))) return nullopt;
-                            const width = unitsPerFaceDiameter / 2 * 1;
-                            return opt(<rect
-                              key={`${playerShips.iPlayer}.${iShip}`}
-                              x={-width / 2}
-                              y={-width / 2}
-                              width={width}
-                              height={width}
-                              fill={playerShips.iPlayer == 0 ? "pink" : "lime"}
-                              fillOpacity="1.0"
-                            />);
-                          }))
-                    }
-                    {
-                      // arrows
-                      throwOnNullopt(
-                        history.pastTurns
-                          .concat(
-                            history.currentTurn.phase == GameTurnPhase.Astrogation
-                              ? []
-                              : [history.currentTurn]
-                          )
-                          .map(t => {
-                            return {
-                              iPlayerActive: t.iPlayerActive,
-                              astrogation:
-                                throwOnNullopt(t.startingState.ships.get(t.iPlayerActive), "iPlayerActive and ships length mismatch")
-                                  .takeZip(t.astrogation)
-                                  .map(([startingState, astrogation]) =>
-                                    startingState.eliminated
-                                      ? asType<{ eliminated: true }>()({ eliminated: true })
-                                      : {
-                                        eliminated: false as false,
-                                        startPosition: startingState.position,
-                                        ignoredFirstWeakGravityBodies: astrogation.ignoredFirstWeakGravityBodies,
-                                        thrust: astrogation.thrust,
-                                        overloaded: astrogation.overloaded,
-                                        rollout: astrogation.rollout,
-                                      }
-                                  ),
-                            };
-                          })
-                          .concat({
-                            iPlayerActive: history.currentTurn.iPlayerActive,
-                            astrogation:
-                              history.currentTurn.phase == GameTurnPhase.Astrogation
-                                ? throwOnNullopt(history.currentTurn.startingState.ships.get(history.currentTurn.iPlayerActive), "iPlayerActive and ships length mismatch")
-                                  .takeZip(history.currentTurn.astrogationsInProgress)
-                                  .map(([startingState, astrogationInProgress]) =>
-                                    startingState.eliminated
-                                      ? asType<{ eliminated: true }>()({ eliminated: true })
-                                      : {
-                                        eliminated: false as false,
-                                        startPosition: startingState.position,
-                                        ignoredFirstWeakGravityBodies:
-                                          astrogationInProgress.ignoredFirstWeakGravityBodies
-                                            .filter(b => b.planned && b.plannedIgnore)
-                                            .map(b => b.iBody),
-                                        thrust:
-                                          astrogationInProgress.thrust.planned
-                                            ? astrogationInProgress.thrust.thrust
-                                            : nullopt,
-                                        overloaded:
-                                          astrogationInProgress.thrust.planned && astrogationInProgress.thrust.thrust.hasValue
-                                            ? magnitude(fullPos(astrogationInProgress.thrust.thrust.value)) > 1
-                                            : false,
-                                        rollout: astrogationInProgress.rollout,
-                                      }
-                                  )
-                                : []
-                          })
-                          .map((t, iTurn) => ({ iTurn, ...t }))
-                          .groupByAtMost(t => t.iPlayerActive, new Set(Array(playerCount).fill(false).map((_, i) => i))), "turn has unexpected active player")
-                        .rotate((history.currentTurn.iPlayerActive + 1) % playerCount) // render the active player's ships last / on top
-                        .flatMap(playerHistory =>
-                          takeZipAll(...playerHistory.group.map(turn => turn.astrogation.map(shipAstrogation => ({
-                            iTurn: turn.iTurn,
-                            astrogation: shipAstrogation,
-                          }))))
-                            .flatMap((shipHistory, iShip) =>
-                              shipHistory.flatMap(shipTurn => {
-                                if (shipTurn.astrogation.eliminated === true) return [];
-                                if (!posEqual(shipTurn.astrogation.startPosition, fromHex(hex))) return [];
-                                const dx = unitsPerVertexSpacing * (shipTurn.astrogation.rollout.netTransform.q);
-                                const dy = unitsPerFaceDiameter * (shipTurn.astrogation.rollout.netTransform.r + shipTurn.astrogation.rollout.netTransform.q / 2);
-                                const d = Math.sqrt(dx * dx + dy * dy);
-                                const scale = (d - unitsPerFaceDiameter * 0.3) / d;
-                                return [
-                                  <Arrow
-                                    key={`${playerHistory.key};${iShip};${shipTurn.iTurn};transform`}
-                                    x2={unitsPerVertexSpacing * (shipTurn.astrogation.rollout.netTransform.q) * scale}
-                                    y2={unitsPerFaceDiameter * (shipTurn.astrogation.rollout.netTransform.r + shipTurn.astrogation.rollout.netTransform.q / 2) * scale}
-                                    color="white"
-                                    strokeWidth={0.2}
-                                    opacity={Math.max(0, 1 + (shipTurn.iTurn - history.pastTurns.length + 2) / 10)}
-                                  />,
-                                  ...(() => {
-                                    if (history.pastTurns.length - shipTurn.iTurn + 1 > 5) return [];
-                                    const subArrows: ({ props: ArrowProps } & { transform: Position, key: string })[] = [
-                                      {
-                                        key: "momentum",
-                                        transform: shipTurn.astrogation.rollout.momentumAppliedFromLast,
-                                        props: {
-                                          color: "green",
-                                          strokeWidth: 0.1,
-                                          opacity: 0.5,
-                                        },
-                                      },
-                                      {
-                                        key: "gravity",
-                                        transform: shipTurn.astrogation.rollout.gravityAppliedFromLast.net,
-                                        props: {
-                                          color: "#600c94",
-                                          strokeWidth: 0.1,
-                                          opacity: 0.7,
-                                        }
-                                      },
-                                    ].concat(
-                                      shipTurn.astrogation.thrust.hasValue
-                                        ? [{
-                                          key: "thrust",
-                                          transform: shipTurn.astrogation.thrust.value,
-                                          props: {
-                                            color: "orange",
-                                            strokeWidth: 0.13,
-                                            opacity: 0.8,
-                                          },
-                                        }]
-                                        : []
-                                    );
-
-                                    let pos = { x: 0, y: 0 };
-                                    return subArrows.filter(a => !posEqual(a.transform, zeroPos)).map(a => {
-                                      const startPos = pos;
-                                      pos = { x: pos.x + unitsPerVertexSpacing * a.transform.q, y: pos.y + unitsPerFaceDiameter * (a.transform.r + a.transform.q / 2) };
-                                      return <Arrow
-                                        key={`${playerHistory.key};${iShip};${shipTurn.iTurn};${a.key}`}
-                                        x1={startPos.x}
-                                        y1={startPos.y}
-                                        x2={pos.x}
-                                        y2={pos.y}
-                                        color={a.props.color}
-                                        {...a.props}
-                                      />;
-                                    });
-                                  })()
-                                ];
-                              })
-                            )
-                        )
                     }
                   </Hexagon>
                 ))
