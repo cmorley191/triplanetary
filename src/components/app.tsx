@@ -523,47 +523,82 @@ const AstrogationTrace: React.FC<AstrogationTraceProps> = (props) => {
   const tension = 1;
 
   const { layout } = useLayoutContext();
-  const pathData = React.useMemo(() => {
+  const { points, pathData } = React.useMemo(() => {
     const points = props.points.map(p => HexUtils.hexToPixel(p, layout));
     const [firstPoint] = points.take1();
-    if (!firstPoint.hasValue) return "";
+    if (!firstPoint.hasValue) return { points, pathData: "" };
 
-    return (
-      `M ${firstPoint.value.x},${firstPoint.value.y}`
-      + (
-        [
-          nullopt_<Point>(),
-          ...points.map(p => opt(p)),
-          nullopt_<Point>(),
-        ]
-          .slide4()
-          .map(([prevOpt, startOpt, endOpt, nextOpt]) => {
-            const start: Point = throwOnNullopt(startOpt, "more left padding than expected in source array");
-            const end = throwOnNullopt(endOpt, "more right padding than expected in source array");
-            const prev = optValueOr(prevOpt, start);
-            const next = optValueOr(nextOpt, end);
+    return {
+      points,
+      pathData: (
+        `M ${firstPoint.value.x},${firstPoint.value.y}`
+        + (
+          [
+            nullopt_<Point>(),
+            ...points.map(p => opt(p)),
+            nullopt_<Point>(),
+          ]
+            .slide4()
+            .map(([prevOpt, startOpt, endOpt, nextOpt]) => {
+              const start: Point = throwOnNullopt(startOpt, "more left padding than expected in source array");
+              const end = throwOnNullopt(endOpt, "more right padding than expected in source array");
+              const prev = optValueOr(prevOpt, start);
+              const next = optValueOr(nextOpt, end);
 
-            const startControl = addPoint(start, scalePoint(subPoint(end, prev), 1 / 6 / tension));
-            const endControl = subPoint(end, scalePoint(subPoint(next, start), 1 / 6 / tension));
+              const startControl = addPoint(start, scalePoint(subPoint(end, prev), 1 / 6 / tension));
+              const endControl = subPoint(end, scalePoint(subPoint(next, start), 1 / 6 / tension));
 
-            return ` C ${startControl.x},${startControl.y} ${endControl.x},${endControl.y} ${end.x},${end.y}`;
-          })
+              return ` C ${startControl.x},${startControl.y} ${endControl.x},${endControl.y} ${end.x},${end.y}`;
+            })
+        )
       )
-    );
+    };
   },
     // dynamic dependency length is "unsupported" (and prints a console error in development mode) 
     // but this approach should work and we can ignore the error so let's just move on with our lives 
     // https://github.com/facebook/react/issues/18229#issuecomment-781478424
     [props.points.length, ...props.points]);
 
+  const maskId = React.useId();
+  const markerWidth = 0.4;
+
   return <g>
+    <mask id={maskId}>
+      <rect x="0" y="0" width="100%" height="100%" fill="white" />
+      {
+        points.map((point, iPoint) =>
+          <circle
+            key={iPoint}
+            cx={point.x}
+            cy={point.y}
+            r={0.5}
+            fill="black"
+            fillOpacity={0.5}
+          />
+        )
+      }
+    </mask>
     <path
       d={pathData}
-      stroke="rgba(255,255,255,0.5)"
+      stroke="white"
+      strokeOpacity={0.5}
       strokeWidth={0.2}
       fill="none"
       strokeDasharray="0.2 0.2"
+      mask={`url(#${maskId})`}
     />
+    {
+      points.map((point, iPoint) =>
+        <rect
+          key={iPoint}
+          x={point.x - markerWidth / 2}
+          y={point.y - markerWidth / 2}
+          width={markerWidth}
+          height={markerWidth}
+          fill="#999999"
+        />
+      )
+    }
   </g>;
 };
 
@@ -893,6 +928,31 @@ export default function App({ }: AppProps) {
                 astralBodyNames.map((name, iBody) => <AstralBody key={iBody} name={name} />)
               }
             </g>
+            <g id="astrogation-traces">
+              {
+                astrogationHistories
+                  .rotate((history.currentTurn.iPlayerActive + 1) % playerCount) // render the active player's ships last / on top
+                  .flatMap(playerHistory =>
+                    playerHistory.ships.map((shipHistory, iShip) => {
+                      const [firstTurn] = shipHistory.take1();
+                      return <AstrogationTrace
+                        key={`${playerHistory.iPlayer};${iShip}`}
+                        points={
+                          !firstTurn.hasValue || firstTurn.value.astrogation.eliminated
+                            ? []
+                            : [
+                              firstTurn.value.astrogation.startPosition,
+                              ...shipHistory.filterTransform(turn =>
+                                (turn.astrogation.eliminated)
+                                  ? nullopt
+                                  : opt(turn.astrogation.rollout.endPosition)
+                              )
+                            ]
+                        }
+                      />;
+                    }))
+              }
+            </g>
             <g id="ships">
               {
                 history.currentTurn.startingState.ships
@@ -938,31 +998,6 @@ export default function App({ }: AppProps) {
                       })
                     )
                   ).take(0)
-              }
-            </g>
-            <g id="astrogation-traces">
-              {
-                astrogationHistories
-                  .rotate((history.currentTurn.iPlayerActive + 1) % playerCount) // render the active player's ships last / on top
-                  .flatMap(playerHistory =>
-                    playerHistory.ships.map((shipHistory, iShip) => {
-                      const [firstTurn] = shipHistory.take1();
-                      return <AstrogationTrace
-                        key={`${playerHistory.iPlayer};${iShip}`}
-                        points={
-                          !firstTurn.hasValue || firstTurn.value.astrogation.eliminated
-                            ? []
-                            : [
-                              firstTurn.value.astrogation.startPosition,
-                              ...shipHistory.filterTransform(turn =>
-                                (turn.astrogation.eliminated)
-                                  ? nullopt
-                                  : opt(turn.astrogation.rollout.endPosition)
-                              )
-                            ]
-                        }
-                      />;
-                    }))
               }
             </g>
             {
