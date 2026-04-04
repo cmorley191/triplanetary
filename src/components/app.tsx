@@ -5,11 +5,13 @@ import * as React from "react";
 
 import { HexGrid, Layout, Hexagon, Hex, HexUtils } from 'react-hexgrid';
 import { useLayoutContext } from 'react-hexgrid/lib/Layout';
+import Point from 'react-hexgrid/lib/models/Point';
 
 import { asteroidFields, astralBodies, astralBodiesMap, AstralBodyName, astralBodyNames, AstralBodyType, GameHistoryTurn, GameHistoryTurnAstrogationComplete, GameTurnPhase, OverloadStatus, physicsStep } from "../game/game";
 import { nullopt, nullopt_, opt, Optional, optValueOr, throwOnNullopt } from "../core/optional";
 import { assertType, asType, clamp, Element2TypeOf, ElementTypeOf, getRandomInt, lerp, map2, satisfiesCheck, takeZipAll, tuple2, weightedRandom } from '../core/misc';
 import { addPos, fromHex, fullPos, getHexInteractions, magnitude, PathInteractionType, posEqual, Position, sides, subPos, subPos_, zeroPos } from '../game/hex';
+import { addPoint, scalePoint, subPoint } from '../game/point';
 
 
 const mapSize = { width: 66, height: 35 };
@@ -514,6 +516,57 @@ const AstrogationMarker: React.FC<AstrogationMarkerProps> = (props) => {
   </g>;
 };
 
+type AstrogationTraceProps = {
+  points: Position[];
+};
+const AstrogationTrace: React.FC<AstrogationTraceProps> = (props) => {
+  const tension = 1;
+
+  const { layout } = useLayoutContext();
+  const pathData = React.useMemo(() => {
+    const points = props.points.map(p => HexUtils.hexToPixel(p, layout));
+    const [firstPoint] = points.take1();
+    if (!firstPoint.hasValue) return "";
+
+    return (
+      `M ${firstPoint.value.x},${firstPoint.value.y}`
+      + (
+        [
+          nullopt_<Point>(),
+          ...points.map(p => opt(p)),
+          nullopt_<Point>(),
+        ]
+          .slide4()
+          .map(([prevOpt, startOpt, endOpt, nextOpt]) => {
+            const start: Point = throwOnNullopt(startOpt, "more left padding than expected in source array");
+            const end = throwOnNullopt(endOpt, "more right padding than expected in source array");
+            const prev = optValueOr(prevOpt, start);
+            const next = optValueOr(nextOpt, end);
+
+            const startControl = addPoint(start, scalePoint(subPoint(end, prev), 1 / 6 / tension));
+            const endControl = subPoint(end, scalePoint(subPoint(next, start), 1 / 6 / tension));
+
+            return ` C ${startControl.x},${startControl.y} ${endControl.x},${endControl.y} ${end.x},${end.y}`;
+          })
+      )
+    );
+  },
+    // dynamic dependency length is "unsupported" (and prints a console error in development mode) 
+    // but this approach should work and we can ignore the error so let's just move on with our lives 
+    // https://github.com/facebook/react/issues/18229#issuecomment-781478424
+    [props.points.length, ...props.points]);
+
+  return <g>
+    <path
+      d={pathData}
+      stroke="rgba(255,255,255,0.5)"
+      strokeWidth={0.2}
+      fill="none"
+      strokeDasharray="0.2 0.2"
+    />
+  </g>;
+};
+
 type AppProps = {};
 export default function App({ }: AppProps) {
 
@@ -608,6 +661,75 @@ export default function App({ }: AppProps) {
       hexagons.push(new Hex(p.q, p.r, p.s));
     }
   }
+
+  const astrogationHistories = throwOnNullopt(
+    history.pastTurns
+      .concat(
+        history.currentTurn.phase === GameTurnPhase.Astrogation
+          ? []
+          : [history.currentTurn]
+      )
+      .map(t => {
+        return {
+          iPlayerActive: t.iPlayerActive,
+          astrogation:
+            throwOnNullopt(t.startingState.ships.get(t.iPlayerActive), "iPlayerActive and ships length mismatch")
+              .takeZip(t.astrogation)
+              .map(([start, astrogation]) =>
+                start.eliminated
+                  ? asType<{ eliminated: true }>()({ eliminated: true })
+                  : {
+                    eliminated: false as false,
+                    startPosition: start.position,
+                    ignoredFirstWeakGravityBodies: astrogation.ignoredFirstWeakGravityBodies,
+                    thrust: astrogation.thrust,
+                    overloaded: astrogation.overloaded,
+                    rollout: astrogation.rollout,
+                  }
+              ),
+        };
+      })
+      .concat({
+        iPlayerActive: history.currentTurn.iPlayerActive,
+        astrogation:
+          history.currentTurn.phase == GameTurnPhase.Astrogation
+            ? throwOnNullopt(history.currentTurn.startingState.ships.get(history.currentTurn.iPlayerActive), "iPlayerActive and ships length mismatch")
+              .takeZip(history.currentTurn.astrogationsInProgress)
+              .map(([start, astrogationInProgress]) =>
+                start.eliminated
+                  ? asType<{ eliminated: true }>()({ eliminated: true })
+                  : {
+                    eliminated: false as false,
+                    startPosition: start.position,
+                    ignoredFirstWeakGravityBodies:
+                      astrogationInProgress.ignoredFirstWeakGravityBodies
+                        .filter(b => b.planned && b.plannedIgnore)
+                        .map(b => b.iBody),
+                    thrust:
+                      astrogationInProgress.thrust.planned
+                        ? astrogationInProgress.thrust.thrust
+                        : nullopt,
+                    overloaded:
+                      astrogationInProgress.thrust.planned && astrogationInProgress.thrust.thrust.hasValue
+                        ? magnitude(fullPos(astrogationInProgress.thrust.thrust.value)) > 1
+                        : false,
+                    rollout: astrogationInProgress.rollout,
+                  }
+              )
+            : []
+      })
+      .map((t, iTurn) => ({ iTurn, ...t }))
+      .groupByAtMost(t => t.iPlayerActive, new Set(Array(playerCount).fill(false).map((_, i) => i))), "turn has unexpected active player")
+    .map(playerHistory => ({
+      iPlayer: playerHistory.key,
+      // astrogation[turn][ship] --zip--> astrogation[ship][turn]
+      ships: takeZipAll(...playerHistory.group.map(turn => turn.astrogation.map(shipAstrogation => ({
+        iTurn: turn.iTurn,
+        astrogation: shipAstrogation,
+      }))))
+    }));
+
+
 
   return (
     <div style={{ margin: 10 }}>
@@ -802,82 +924,45 @@ export default function App({ }: AppProps) {
             </g>
             <g id="astrogation-markers">
               {
-                throwOnNullopt(
-                  history.pastTurns
-                    .concat(
-                      history.currentTurn.phase === GameTurnPhase.Astrogation
-                        ? []
-                        : [history.currentTurn]
-                    )
-                    .map(t => {
-                      return {
-                        iPlayerActive: t.iPlayerActive,
-                        astrogation:
-                          throwOnNullopt(t.startingState.ships.get(t.iPlayerActive), "iPlayerActive and ships length mismatch")
-                            .takeZip(t.astrogation)
-                            .map(([start, astrogation]) =>
-                              start.eliminated
-                                ? asType<{ eliminated: true }>()({ eliminated: true })
-                                : {
-                                  eliminated: false as false,
-                                  startPosition: start.position,
-                                  ignoredFirstWeakGravityBodies: astrogation.ignoredFirstWeakGravityBodies,
-                                  thrust: astrogation.thrust,
-                                  overloaded: astrogation.overloaded,
-                                  rollout: astrogation.rollout,
-                                }
-                            ),
-                      };
-                    })
-                    .concat({
-                      iPlayerActive: history.currentTurn.iPlayerActive,
-                      astrogation:
-                        history.currentTurn.phase == GameTurnPhase.Astrogation
-                          ? throwOnNullopt(history.currentTurn.startingState.ships.get(history.currentTurn.iPlayerActive), "iPlayerActive and ships length mismatch")
-                            .takeZip(history.currentTurn.astrogationsInProgress)
-                            .map(([start, astrogationInProgress]) =>
-                              start.eliminated
-                                ? asType<{ eliminated: true }>()({ eliminated: true })
-                                : {
-                                  eliminated: false as false,
-                                  startPosition: start.position,
-                                  ignoredFirstWeakGravityBodies:
-                                    astrogationInProgress.ignoredFirstWeakGravityBodies
-                                      .filter(b => b.planned && b.plannedIgnore)
-                                      .map(b => b.iBody),
-                                  thrust:
-                                    astrogationInProgress.thrust.planned
-                                      ? astrogationInProgress.thrust.thrust
-                                      : nullopt,
-                                  overloaded:
-                                    astrogationInProgress.thrust.planned && astrogationInProgress.thrust.thrust.hasValue
-                                      ? magnitude(fullPos(astrogationInProgress.thrust.thrust.value)) > 1
-                                      : false,
-                                  rollout: astrogationInProgress.rollout,
-                                }
-                            )
-                          : []
-                    })
-                    .map((t, iTurn) => ({ iTurn, ...t }))
-                    .groupByAtMost(t => t.iPlayerActive, new Set(Array(playerCount).fill(false).map((_, i) => i))), "turn has unexpected active player")
+                astrogationHistories
                   .rotate((history.currentTurn.iPlayerActive + 1) % playerCount) // render the active player's ships last / on top
                   .flatMap(playerHistory =>
-                    // astrogation[turn][ship] --zip--> astrogation[ship][turn]
-                    takeZipAll(...playerHistory.group.map(turn => turn.astrogation.map(shipAstrogation => ({
-                      iTurn: turn.iTurn,
-                      astrogation: shipAstrogation,
-                    }))))
-                      .flatMap((shipHistory, iShip) =>
-                        shipHistory.map(shipTurn => {
-                          if (shipTurn.astrogation.eliminated === true) return undefined;
-                          return <AstrogationMarker
-                            key={`${playerHistory.key};${iShip};${shipTurn.iTurn}`}
-                            {...shipTurn.astrogation}
-                            opacity={Math.max(0, 1 + (shipTurn.iTurn - history.pastTurns.length + 2) / 10)}
-                          />;
-                        })
-                      )
-                  )
+                    playerHistory.ships.flatMap((shipHistory, iShip) =>
+                      shipHistory.map(shipTurn => {
+                        if (shipTurn.astrogation.eliminated === true) return undefined;
+                        return <AstrogationMarker
+                          key={`${playerHistory.iPlayer};${iShip};${shipTurn.iTurn}`}
+                          {...shipTurn.astrogation}
+                          opacity={Math.max(0, 1 + (shipTurn.iTurn - history.pastTurns.length + 2) / 10)}
+                        />;
+                      })
+                    )
+                  ).take(0)
+              }
+            </g>
+            <g id="astrogation-traces">
+              {
+                astrogationHistories
+                  .rotate((history.currentTurn.iPlayerActive + 1) % playerCount) // render the active player's ships last / on top
+                  .flatMap(playerHistory =>
+                    playerHistory.ships.map((shipHistory, iShip) => {
+                      const [firstTurn] = shipHistory.take1();
+                      return <AstrogationTrace
+                        key={`${playerHistory.iPlayer};${iShip}`}
+                        points={
+                          !firstTurn.hasValue || firstTurn.value.astrogation.eliminated
+                            ? []
+                            : [
+                              firstTurn.value.astrogation.startPosition,
+                              ...shipHistory.filterTransform(turn =>
+                                (turn.astrogation.eliminated)
+                                  ? nullopt
+                                  : opt(turn.astrogation.rollout.endPosition)
+                              )
+                            ]
+                        }
+                      />;
+                    }))
               }
             </g>
             {

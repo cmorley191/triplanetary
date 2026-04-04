@@ -187,6 +187,7 @@ export function lerp(a: number, b: number, t: number) {
 
 export function tuple2<T, U>(t: [T, U]): [T, U] { return t; }
 export function tuple3<T, U, V>(t: [T, U, V]): [T, U, V] { return t; }
+export function tuple4<T, U, V, W>(t: [T, U, V, W]): [T, U, V, W] { return t; }
 
 export function map2<T, U>(arr: [T, T], mapper: (value: T, index: 0 | 1) => U): [U, U] {
   return [mapper(arr[0], 0), mapper(arr[1], 1)];

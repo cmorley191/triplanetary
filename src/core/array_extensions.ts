@@ -73,6 +73,16 @@ declare global {
     rotate(start: number): T[],
 
     /**
+     * Returns slices of the array at each step of length windowSize.
+     * 
+     * e.g. `[1, 2, 3, 4].slice(2)` returns `[[1, 2], [2, 3], [3, 4]]`
+     */
+    slide(windowSize: number): T[][]
+    slide2(): [T, T][]
+    slide3(): [T, T, T][]
+    slide4(): [T, T, T, T][]
+
+    /**
      * Splits the array into two arrays `[trues, falses]` using the predicate.
      * The first array contains elements that predicate returned `true` for,
      * and the second array has the `false` elements.
@@ -252,6 +262,24 @@ Array.prototype.shuffled = function <T>(this: T[]): T[] {
       this[randomIndex]!, this[swapsRemaining]!];
   }
   return this;
+}
+
+Array.prototype.slide = function <T>(this: T[], windowSize: number): T[][] {
+  if (windowSize < 1) return [];
+
+  return Array.from({ length: Math.max(0, this.length - windowSize + 1) }, (_, i) => this.slice(i, i + windowSize));
+}
+Array.prototype.slide2 = function <T>(this: T[]): [T, T][] {
+  // scary nonnull assertion! but removing the `| undefined` caused by index out of bounds is the whole point of this function.
+  return this.slide(2).map(s => [s[0]!, s[1]!]);
+}
+Array.prototype.slide3 = function <T>(this: T[]): [T, T, T][] {
+  // scary nonnull assertion! but removing the `| undefined` caused by index out of bounds is the whole point of this function.
+  return this.slide(3).map(s => [s[0]!, s[1]!, s[2]!]);
+}
+Array.prototype.slide4 = function <T>(this: T[]): [T, T, T, T][] {
+  // scary nonnull assertion! but removing the `| undefined` caused by index out of bounds is the whole point of this function.
+  return this.slide(4).map(s => [s[0]!, s[1]!, s[2]!, s[3]!]);
 }
 
 Array.prototype.splitMap = function <T, U>(this: T[], predicate: (element: T, index: number) => [boolean, U]) {
